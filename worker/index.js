@@ -1,4 +1,7 @@
 const DEFAULT_ORG = "00000000-0000-4000-8000-000000000001";
+// prepare-sites.mjs replaces this empty map with the built frontend assets so
+// the worker can serve a self-contained app on the hosted runtime.
+const STATIC_ASSETS = {};
 const DEFAULT_USER = {
   id: "00000000-0000-4000-8000-000000000002",
   name: "Aarav Mehta",
@@ -16,7 +19,15 @@ export default {
     if (url.pathname.startsWith("/api/")) {
       return handleApi(request, env, url);
     }
-    return env.ASSETS.fetch(request);
+    const assetPath = url.pathname === "/" ? "/index.html" : url.pathname;
+    const asset = STATIC_ASSETS[assetPath];
+    if (asset) {
+      const binary = atob(asset.body);
+      const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+      return new Response(bytes, { headers: { "Content-Type": asset.type, "Cache-Control": assetPath === "/index.html" ? "no-cache" : "public, max-age=31536000, immutable" } });
+    }
+    if (env.ASSETS?.fetch) return env.ASSETS.fetch(request);
+    return new Response("Not found", { status: 404 });
   },
 };
 
