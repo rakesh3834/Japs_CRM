@@ -91,7 +91,11 @@ const departures = [
 ];
 
 const formatINR = (value) => `₹${new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 }).format(value)}`;
-const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+// Local development keeps the separate FastAPI port. In a hosted build the
+// worker serves both the static app and /api/*, so use same-origin requests.
+const API_BASE = import.meta.env.VITE_API_BASE_URL || (
+  typeof window !== "undefined" && window.location.port === "5173" ? "http://localhost:8000" : ""
+);
 
 async function apiRequest(path, options = {}) {
   const response = await fetch(`${API_BASE}${path}`, {

@@ -1,0 +1,8 @@
+{
+  "name": "japs-crm-site",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "npm --prefix frontend run build && node scripts/prepare-sites.mjs"
+  }
+}

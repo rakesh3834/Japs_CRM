@@ -1,7 +1,9 @@
 frontend/node_modules/
 frontend/dist/
+dist/
 backend/.venv/
 backend/**/__pycache__/
+.wrangler/
 .DS_Store
 tmp/
 .env
