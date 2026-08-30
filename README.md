@@ -40,3 +40,11 @@ When Supabase credentials are present, `/api/dashboard`, `/api/leads`, `/api/tri
 ## Login note
 
 The requested no-OTP login is implemented as a trusted internal MVP form accepting name, email, and phone. It is not identity verification. Before external or consumer use, replace it with verified Supabase Auth (email/phone OTP or magic link) while keeping the same `organization_memberships` model.
+
+## Hosted app
+
+The public app is served by the worker-backed deployment at
+https://japs-crm.rakesh-collegedunia.chatgpt.site. The GitHub Pages entry point
+at https://rakesh3834.github.io/Japs_CRM/ redirects to that live app. Supabase
+credentials are configured as server-side runtime secrets; they are never
+bundled into the frontend.
