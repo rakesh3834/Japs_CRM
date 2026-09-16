@@ -1,50 +1,46 @@
 # Japs_CRM
 
-Japs_CRM is a responsive travel-agency CRM prototype. It treats the trip as the shared record between sales, planning, operations, suppliers, and payment tracking.
+Travel-agency CRM with a React interface, Cloudflare-compatible Worker API and an existing Supabase database. WhatsApp lead capture starts when a customer **sends a message**, not when they merely open a chat.
 
-## Run locally
+## Implemented locally
 
-Frontend:
+- Temporary administrator password sign-in backed by Supabase; email-code setup is paused. Server-side role and organization checks protect every customer API.
+- Signed WhatsApp webhook with atomic contact/enquiry/message writes, duplicate protection and out-of-order first-touch correction.
+- Read-only ad → campaign/ad-set lookup, with durable pending work if Meta access fails.
+- Settings: connection readiness, read-only coexistence check, campaign retry and ad-to-package mapping.
+- Missing names, phone numbers and click platforms are not invented.
+- Existing business records remain in Supabase. Legacy self-created administrators are not automatically trusted.
+- Operations, reports and some dashboard/finance panels remain labelled design previews. Network errors never fabricate saved records.
 
-```bash
-cd frontend
-npm install
-npm run dev
+A successful build is not proof of a live Meta connection. See [the staged setup guide](docs/whatsapp-setup.md).
+
+## Local development
+
+1. Install dependencies: `npm --prefix frontend install`.
+2. Supply server-only values from `.env.example` in `.env`.
+3. Run `npm run dev:api` from the project root.
+4. Run `npm --prefix frontend run dev`; open `http://127.0.0.1:5173`.
+
+Vite proxies /api to the exact deployed Worker. The old FastAPI prototype refuses to run against real database credentials; its unverified login is no longer supported.
+
+## Validation
+
+```sh
+npm test
+node scripts/test-database.mjs
+npm run build
 ```
 
-FastAPI:
+Database tests use an isolated local PostgreSQL cluster, never Supabase. Set JAPS_TEST_PG_BIN if executables are not in /opt/homebrew/bin. Build output bundles the Worker and frontend assets into dist/server/index.js.
 
-```bash
-cd backend
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
-```
+## Rollout gates
 
-The current interface ships with demo data so it can be explored immediately. To connect the real Supabase project, copy [`.env.example`](.env.example) to `.env`, replace `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`, and run [`supabase/schema.sql`](supabase/schema.sql) once in the Supabase SQL editor. The FastAPI process loads the workspace `.env` automatically from either the project root or `backend/`. Keep the service-role key server-side; never put it in `frontend/.env`. For a deployed environment set `JAPS_CRM_ALLOW_DEMO=false`, use a long `JAPS_CRM_SESSION_SECRET`, and set `JAPS_CRM_COOKIE_SECURE=true`.
+For the existing database, do not rerun the initial schema. Apply the verified-staff migration, the follow-up profile/attribution migration, then the explicitly approved administrator bootstrap only where it has not already been applied. The exact agency number's coexistence and CRM account subscription are verified; Meta app publication and a real-message acceptance test remain separate gates.
 
-When Supabase credentials are present, `/api/dashboard`, `/api/leads`, `/api/trips`, `/api/contacts`, `/api/suppliers`, and `/api/payments` read the organization-scoped records from Supabase. Lead creation creates the customer contact and lead together; trip creation can convert a lead code into a trip; payment logging resolves the human trip code (for example `TRP-248`) to its UUID before writing.
+While email is paused, set `JAPS_CRM_AUTH_MODE=temporary_password`, `JAPS_CRM_TEMP_ADMIN_EMAIL` and a future `JAPS_CRM_TEMP_ADMIN_EXPIRES_AT`. Only that already-confirmed, approved Admin/Owner can sign in. Supabase stores the password; never place it in source or frontend configuration. Missing/expired configuration fails closed. Email endpoints are disabled in password mode.
 
-## Current slice
+When email sign-in is explicitly resumed, set `JAPS_CRM_AUTH_MODE=email`, configure the Supabase live Site URL and a code-based email template using `{{ .Token }}`, and verify delivery first. Current Supabase access tokens expire after one hour; no browser refresh token is stored.
 
-- Command center with action queue, pipeline pulse, upcoming departures, trip health, and recent leads.
-- Leads list with search, stage filters, responsive cards, and two-step lead capture drawer.
-- Trip workspaces with health and progress drawers.
-- Operations week calendar and mobile-friendly day view.
-- Money screen for manual incoming/outgoing payment tracking; no gateway collection.
-- Contacts, supplier network, reports, file library, and workspace settings surfaces so every primary navigation item has a usable home from day one.
-- INR default currency and 5% tax displayed in workspace configuration.
-- FastAPI endpoints for login, dashboard, leads, trips, contacts, suppliers, operations, and payments, including lead-to-trip conversion.
+Existing Site: https://japs-crm.rakesh-collegedunia.chatgpt.site
 
-## Login note
-
-The requested no-OTP login is implemented as a trusted internal MVP form accepting name, email, and phone. It is not identity verification. Before external or consumer use, replace it with verified Supabase Auth (email/phone OTP or magic link) while keeping the same `organization_memberships` model.
-
-## Hosted app
-
-The public app is served by the worker-backed deployment at
-https://japs-crm.rakesh-collegedunia.chatgpt.site. The GitHub Pages entry point
-at https://rakesh3834.github.io/Japs_CRM/ redirects to that live app. Supabase
-credentials are configured as server-side runtime secrets; they are never
-bundled into the frontend.
+Runtime secrets stay server-only. Public publication is approved; customer APIs remain staff-authenticated. Public privacy and manual deletion-request instructions are available at `/privacy` and `/data-deletion`. Do not roll back to the old unsigned-login Worker. GitHub Pages only redirects to the full hosted CRM; it cannot host the Worker or database itself.
