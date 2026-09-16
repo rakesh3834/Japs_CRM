@@ -1,16 +1,23 @@
 import { useEffect, useState } from "react";
 import { Compass, ShieldCheck } from "lucide-react";
 
-export function LoginScreen({ api, onSignedIn, checking, initialError }) {
+export function LoginScreen({ api, mode = "paused", onSignedIn, checking, initialError }) {
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
   const [sent, setSent] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [password, setPassword] = useState("");
+  const passwordMode = mode === "temporary_password";
   async function submit(event) {
     event.preventDefault(); setBusy(true); setMessage("");
     try {
-      if (!sent) {
+      if (passwordMode) {
+        const result = await api("/api/auth/password", { method: "POST", body: JSON.stringify({ email, password }) });
+        setPassword(""); onSignedIn(result.user);
+      } else if (mode !== "email") {
+        setMessage("Staff sign-in is paused. Customer records remain protected.");
+      } else if (!sent) {
         const result = await api("/api/auth/request-code", { method: "POST", body: JSON.stringify({ email }) });
         setSent(true); setMessage(result.message);
       } else {
@@ -22,15 +29,18 @@ export function LoginScreen({ api, onSignedIn, checking, initialError }) {
   return <main className="verified-login"><section className="card verified-login-card">
     <div className="brand-mark"><Compass size={24} /></div>
     <div className="eyebrow">Japs_CRM · Staff workspace</div>
-    <h1>Welcome back</h1><p>Sign in with an approved email address to access your agency’s leads and trips.</p>
-    {checking ? <p role="status">Checking your session…</p> : <form className="modal-form" onSubmit={submit}>
+    <h1>{mode === "paused" ? "Staff access paused" : passwordMode ? "Administrator access" : "Welcome back"}</h1>
+    <p>{mode === "paused" ? "Customer records are protected while staff access is being configured. WhatsApp intake is configured separately." : passwordMode ? "Use your administrator email and temporary password. Email codes and confirmation links are paused." : "Sign in with an approved email address to access your agency’s leads and trips."}</p>
+    {checking ? <p role="status">Checking your session…</p> : mode !== "paused" && <form className="modal-form" onSubmit={submit}>
       <label className="field"><span>Email address</span><input required type="email" autoComplete="email" value={email} disabled={sent || busy} onChange={(event) => setEmail(event.target.value)} /></label>
-      {sent && <label className="field"><span>Code from your email</span><input required inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6,10}" maxLength={10} value={code} onChange={(event) => setCode(event.target.value)} /></label>}
-      <button className="primary-button" disabled={busy}>{busy ? "Please wait…" : sent ? "Verify and sign in" : "Email me a sign-in code"}</button>
-      {sent && <button type="button" className="text-button" disabled={busy} onClick={() => { setSent(false); setCode(""); }}>Change email or request a new code</button>}
+      {passwordMode && <label className="field"><span>Temporary administrator password</span><input required type="password" autoComplete="current-password" minLength={12} maxLength={256} value={password} onChange={(event) => setPassword(event.target.value)} /></label>}
+      {!passwordMode && sent && <label className="field"><span>Code from your email</span><input required inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6,10}" maxLength={10} value={code} onChange={(event) => setCode(event.target.value)} /></label>}
+      <button className="primary-button" disabled={busy}>{busy ? "Please wait…" : passwordMode ? "Sign in" : sent ? "Verify and sign in" : "Email me a sign-in code"}</button>
+      {!passwordMode && sent && <button type="button" className="text-button" disabled={busy} onClick={() => { setSent(false); setCode(""); }}>Change email or request a new code</button>}
     </form>}
     {(message || initialError) && <p className="integration-notice" role="status">{message || initialError}</p>}
     <p className="settings-copy"><ShieldCheck size={15} /> Access is granted by your administrator. No customer data is available before verification.</p>
+    <p className="settings-copy"><a href="/privacy">Privacy notice</a> · <a href="/data-deletion">Data-deletion instructions</a></p>
   </section></main>;
 }
 

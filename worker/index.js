@@ -1,4 +1,5 @@
-import { authenticatedUser, handleAuth } from "./auth.js";
+import { authenticatedUser, handleAuth, authMode } from "./auth.js";
+import { policyResponse } from "./policies.js";
 import { receiveWebhook, integrationStatus, integrationAction } from "./whatsapp.js";
 import { HttpError, json, bodyJson, database, organizationId, requireRole, requireSameOrigin } from "./platform.js";
 // prepare-sites.mjs replaces this empty map with the built frontend assets so
@@ -8,6 +9,8 @@ const STATIC_ASSETS = (() => { try { return JSON.parse("__JAPS_STATIC_ASSETS__")
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    const policy = policyResponse(url.pathname);
+    if (policy && request.method === "GET") return policy;
     if (url.pathname.startsWith("/api/")) {
       return handleApi(request, env, url, ctx);
     }
@@ -35,11 +38,11 @@ async function handleApi(request, env, url, ctx) {
       return await handleAuth(request, env, url.pathname);
     }
     if (url.pathname === "/api/health" && request.method === "GET") {
-      return json({ ok: true, service: "Japs_CRM API", authentication: "verified-email" });
+      return json({ ok: true, service: "Japs_CRM API", authentication: authMode(env) });
     }
 
     if (url.pathname === "/api/config" && request.method === "GET") {
-      return respond({ ok: true, brand: "Japs_CRM", default_currency: "INR", tax_rate: 5, payment_collection_enabled: false, lead_channels: ["Manual", "Web form", "Email", "WhatsApp", "Instagram", "Meta lead", "Referral"] }, 200, cors);
+      return respond({ ok: true, brand: "Japs_CRM", auth_mode: authMode(env), default_currency: "INR", tax_rate: 5, payment_collection_enabled: false, lead_channels: ["Manual", "Web form", "Email", "WhatsApp", "Instagram", "Meta lead", "Referral"] }, 200, cors);
     }
 
     const user = await authenticatedUser(request, env);

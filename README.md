@@ -4,7 +4,7 @@ Travel-agency CRM with a React interface, Cloudflare-compatible Worker API and a
 
 ## Implemented locally
 
-- Verified email-code sign-in for explicitly approved staff; server-side role and organization checks.
+- Temporary administrator password sign-in backed by Supabase; email-code setup is paused. Server-side role and organization checks protect every customer API.
 - Signed WhatsApp webhook with atomic contact/enquiry/message writes, duplicate protection and out-of-order first-touch correction.
 - Read-only ad → campaign/ad-set lookup, with durable pending work if Meta access fails.
 - Settings: connection readiness, read-only coexistence check, campaign retry and ad-to-package mapping.
@@ -35,10 +35,12 @@ Database tests use an isolated local PostgreSQL cluster, never Supabase. Set JAP
 
 ## Rollout gates
 
-For the existing database, do not rerun the initial schema. Apply the verified-staff migration, then the explicitly approved administrator bootstrap. The agency number is staged **inactive**; enabling the receiver is separate from supported Meta coexistence onboarding.
+For the existing database, do not rerun the initial schema. Apply the verified-staff migration, the follow-up profile/attribution migration, then the explicitly approved administrator bootstrap only where it has not already been applied. The exact agency number's coexistence and CRM account subscription are verified; Meta app publication and a real-message acceptance test remain separate gates.
 
-Supabase sign-in emails must display `{{ .Token }}`. Verify SMTP delivery to approved staff before publishing. Sessions last at most one hour and require sign-in again; no browser refresh token is stored.
+While email is paused, set `JAPS_CRM_AUTH_MODE=temporary_password`, `JAPS_CRM_TEMP_ADMIN_EMAIL` and a future `JAPS_CRM_TEMP_ADMIN_EXPIRES_AT`. Only that already-confirmed, approved Admin/Owner can sign in. Supabase stores the password; never place it in source or frontend configuration. Missing/expired configuration fails closed. Email endpoints are disabled in password mode.
+
+When email sign-in is explicitly resumed, set `JAPS_CRM_AUTH_MODE=email`, configure the Supabase live Site URL and a code-based email template using `{{ .Token }}`, and verify delivery first. Current Supabase access tokens expire after one hour; no browser refresh token is stored.
 
 Existing Site: https://japs-crm.rakesh-collegedunia.chatgpt.site
 
-Runtime secrets stay server-only. Publication requires approval for the Site’s existing public access; customer APIs remain staff-authenticated. Do not roll back to the old unsigned-login Worker.
+Runtime secrets stay server-only. Public publication is approved; customer APIs remain staff-authenticated. Public privacy and manual deletion-request instructions are available at `/privacy` and `/data-deletion`. Do not roll back to the old unsigned-login Worker. GitHub Pages only redirects to the full hosted CRM; it cannot host the Worker or database itself.

@@ -6,6 +6,7 @@ import { validSignature, normalizeMessages, enrichAd } from "../worker/whatsapp.
 
 const env = { SUPABASE_URL: "https://test.supabase.co", SUPABASE_SERVICE_ROLE_KEY: "test-service-key", JAPS_CRM_APP_ORIGIN: "https://crm.example", JAPS_CRM_ORGANIZATION_ID: "00000000-0000-4000-8000-000000000001", META_APP_SECRET: "test-secret", META_WEBHOOK_VERIFY_TOKEN: "test-verify" };
 const path = "/api/webhooks/whatsapp";
+env.JAPS_CRM_AUTH_MODE = "email";
 function payload(messages, field = "messages") {
   return { object: "whatsapp_business_account", entry: [{ id: "123456", changes: [{ field, value: { metadata: { phone_number_id: "987654", display_phone_number: "917303530355" }, contacts: [{ wa_id: "919999000001", profile: { name: "Test Guest" } }], messages } }] }] };
 }
@@ -15,12 +16,84 @@ function signed(value, secret = env.META_APP_SECRET) {
   return new Request(`https://crm.example${path}`, { method: "POST", headers: { "X-Hub-Signature-256": `sha256=${createHmac("sha256", secret).update(raw).digest("hex")}` }, body: raw });
 }
 const reply = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } });
+const passwordEnv = { ...env, JAPS_CRM_AUTH_MODE: "temporary_password", JAPS_CRM_TEMP_ADMIN_EMAIL: "admin@example.com", JAPS_CRM_TEMP_ADMIN_EXPIRES_AT: "2099-01-01T00:00:00Z" };
+function authPost(route, body) {
+  return new Request(`https://crm.example/api/auth/${route}`, { method: "POST", headers: { Origin: env.JAPS_CRM_APP_ORIGIN, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+}
+
+test("temporary administrator password authenticates without email or exposed tokens", async (t) => {
+  const calls = [];
+  t.mock.method(globalThis, "fetch", async (url, init) => {
+    calls.push(new URL(url).pathname);
+    if (String(url).endsWith("/token?grant_type=password")) {
+      assert.deepEqual(JSON.parse(init.body), { email: "admin@example.com", password: "test-only-password" });
+      return reply({ access_token: "verified-password-token", refresh_token: "must-stay-server-side", expires_in: 3600 });
+    }
+    if (String(url).endsWith("/user")) return reply({ id: "verified-admin", email: "admin@example.com", email_confirmed_at: "2026-01-01" });
+    if (String(url).endsWith("/rpc/crm_bind_verified_staff")) return reply({ id: "profile", role: "Admin", email: "admin@example.com" });
+    throw new Error("Unexpected call");
+  });
+  const response = await worker.fetch(authPost("password", { email: " ADMIN@example.com ", password: "test-only-password", role: "Owner" }), passwordEnv);
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { ok: true, user: { id: "profile", role: "Admin", email: "admin@example.com" } });
+  assert.match(response.headers.get("Set-Cookie"), /HttpOnly; Path=\/; SameSite=Strict; Max-Age=3600; Secure/);
+  assert.deepEqual(calls, ["/auth/v1/token", "/auth/v1/user", "/rest/v1/rpc/crm_bind_verified_staff"]);
+});
+
+test("password mode disables both email endpoints and rejects unapproved identities before upstream calls", async (t) => {
+  t.mock.method(globalThis, "fetch", () => assert.fail("Must not contact auth or database"));
+  for (const route of ["request-code", "verify-code"]) assert.equal((await worker.fetch(authPost(route, { email: "admin@example.com", code: "123456" }), passwordEnv)).status, 503);
+  assert.equal((await worker.fetch(authPost("password", { email: "outsider@example.com", password: "test-only-password" }), passwordEnv)).status, 401);
+  assert.equal((await worker.fetch(authPost("password", { email: "admin@example.com", password: "short" }), passwordEnv)).status, 401);
+});
+
+test("missing or expired auth configuration pauses sign-in and existing sessions", async (t) => {
+  t.mock.method(globalThis, "fetch", () => assert.fail("Paused access must not query customer data"));
+  for (const override of [{ JAPS_CRM_AUTH_MODE: undefined }, { JAPS_CRM_TEMP_ADMIN_EMAIL: "" }, { JAPS_CRM_TEMP_ADMIN_EXPIRES_AT: "2020-01-01" }, { JAPS_CRM_TEMP_ADMIN_EXPIRES_AT: "invalid" }]) {
+    const paused = { ...passwordEnv, ...override };
+    assert.equal((await worker.fetch(authPost("password", { email: "admin@example.com", password: "test-only-password" }), paused)).status, 503);
+    const me = await worker.fetch(new Request("https://crm.example/api/me", { headers: { Cookie: "japs_verified_session=old" } }), paused);
+    assert.equal(me.status, 401); assert.equal((await me.json()).code, "AUTH_PAUSED");
+    assert.equal((await (await worker.fetch(new Request("https://crm.example/api/config"), paused)).json()).auth_mode, "paused");
+  }
+});
+
+test("password failures preserve rate limits and never grant a session", async (t) => {
+  t.mock.method(globalThis, "fetch", async () => reply({ error: "upstream detail" }, 429));
+  const request = () => authPost("password", { email: "admin@example.com", password: "test-only-password" });
+  assert.equal((await worker.fetch(request(), passwordEnv)).status, 429);
+  globalThis.fetch.mock.mockImplementation(async () => reply({ error: "invalid grant" }, 400));
+  const wrong = await worker.fetch(request(), passwordEnv);
+  assert.equal(wrong.status, 401); assert.equal(wrong.headers.get("Set-Cookie"), null);
+});
+
+test("replaced or demoted temporary admin forces cached workspace data to clear", async (t) => {
+  let email = "old-admin@example.com";
+  t.mock.method(globalThis, "fetch", async (url) => String(url).endsWith("/user") ? reply({ id: "admin", email, email_confirmed_at: "2026-01-01" }) : reply([{ role: "Sales", organization_id: env.JAPS_CRM_ORGANIZATION_ID, profile: { id: "profile", email } }]));
+  const request = () => new Request("https://crm.example/api/me", { headers: { Cookie: "japs_verified_session=verified" } });
+  for (const nextEmail of ["old-admin@example.com", "admin@example.com"]) {
+    email = nextEmail;
+    const response = await worker.fetch(request(), passwordEnv);
+    assert.equal(response.status, 403); assert.equal((await response.json()).code, "STAFF_ACCESS_DENIED");
+  }
+});
 
 test("HMAC accepts exact body and rejects changed bytes", async () => {
   const body = new TextEncoder().encode("exact body");
   const signature = `sha256=${createHmac("sha256", "secret").update(body).digest("hex")}`;
   assert.equal(await validSignature(body, signature, "secret"), true);
   assert.equal(await validSignature(new TextEncoder().encode("changed"), signature, "secret"), false);
+});
+
+test("approved privacy and deletion instructions are public without customer access", async (t) => {
+  t.mock.method(globalThis, "fetch", () => assert.fail("Policies must not query customer data"));
+  for (const route of ["privacy", "data-deletion"]) {
+    const response = await worker.fetch(new Request(`https://crm.example/${route}`), {});
+    assert.equal(response.status, 200);
+    const html = await response.text();
+    assert.match(html, /Travel with Japs/); assert.match(html, /contactjapstours@gmail.com/);
+    assert.equal(response.headers.get("Cache-Control"), "no-cache");
+  }
 });
 
 test("anonymous and old unsigned cookies cannot read customer data", async (t) => {

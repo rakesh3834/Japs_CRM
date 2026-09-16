@@ -121,6 +121,7 @@ function App() {
   const [currentUser, setCurrentUser] = useState(null);
   const [checkingAuth, setCheckingAuth] = useState(true);
   const [authError, setAuthError] = useState("");
+  const [authMode, setAuthMode] = useState("paused");
   const generation = useRef(0);
   const [dashboardData, setDashboardData] = useState(null);
   const [contactsData, setContactsData] = useState([]);
@@ -167,10 +168,16 @@ function App() {
     finally { setCheckingAuth(false); }
   }
   useEffect(() => {
-    const expired = () => { clearSession(); setAuthError("Your session expired. Please sign in again."); };
+    const expired = () => {
+      clearSession(); setAuthError("Your session expired. Please sign in again.");
+      void apiRequest("/api/config").then((config) => setAuthMode(config.auth_mode || "paused")).catch(() => setAuthMode("paused"));
+    };
     window.addEventListener("crm-session-expired", expired);
     let cancelled = false;
-    apiRequest("/api/me").then((result) => { if (!cancelled) { setCurrentUser(result.user); setAuthError(""); } })
+    apiRequest("/api/config").then((config) => {
+      if (!cancelled) setAuthMode(config.auth_mode || "paused");
+      return apiRequest("/api/me");
+    }).then((result) => { if (!cancelled) { setCurrentUser(result.user); setAuthError(""); } })
       .catch((error) => { if (!cancelled) setAuthError(error.status === 401 ? "" : error.message); })
       .finally(() => { if (!cancelled) setCheckingAuth(false); });
     return () => { cancelled = true; window.removeEventListener("crm-session-expired", expired); };
@@ -212,7 +219,7 @@ function App() {
     setSelectedTrip(null);
   };
 
-  if (!currentUser) return <LoginScreen api={apiRequest} checking={checkingAuth} initialError={authError} onSignedIn={(user) => { sessionEpoch++; generation.current++; setCurrentUser(user); setAuthError(""); }} />;
+  if (!currentUser) return <LoginScreen api={apiRequest} mode={authMode} checking={checkingAuth} initialError={authError} onSignedIn={(user) => { sessionEpoch++; generation.current++; setCurrentUser(user); setAuthError(""); }} />;
 
   return (
     <div className="app-shell">

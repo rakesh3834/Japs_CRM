@@ -19,7 +19,8 @@ do $$ declare msg jsonb; result jsonb; lead_uuid uuid; begin
   assert result->>'accepted' = 'true';
   assert (public.crm_ingest_whatsapp_message(msg)->>'duplicate') = 'true';
   assert (select count(*) = 1 from public.leads where source = 'Meta WhatsApp ad'), 'Duplicate lead';
-  assert (select travelers is null and destination = 'Manali' and source_platform is null from public.leads where id=lead_uuid), 'Invented customer details';
+  assert (select travelers is null and destination is null and source_platform is null from public.leads where id=lead_uuid), 'Invented customer details';
+  assert (select advertised_destination = 'Manali' from public.crm_lead_inbox where id=lead_uuid), 'Advertised destination missing';
   assert (select enrichment_status = 'pending' from public.meta_ad_attribution where ad_id='12345678'), 'Retry row not durable';
   msg := msg || '{"message_id":"wamid.2","message_text":"Actually a custom Himachal trip","ad_id":"99999999"}';
   result := public.crm_ingest_whatsapp_message(msg);
@@ -35,12 +36,16 @@ do $$ declare msg jsonb; result jsonb; lead_uuid uuid; begin
   result := public.crm_ingest_whatsapp_message(msg || '{"message_id":"wamid.return"}');
   assert (result->>'lead_id')::uuid <> lead_uuid, 'Closed enquiry reused';
 end $$;
+insert into public.meta_ad_mappings(organization_id,ad_id,destination) values ('00000000-0000-4000-8000-000000000001','99999999','Spiti');
 do $$ declare later jsonb; first jsonb; result jsonb; begin
-  later := '{"phone_number_id":"987654","waba_id":"123456","message_id":"out-of-order-later","sender_id":"out-of-order-customer","message_type":"text","message_text":"Following up","timestamp":1789600010}';
-  first := later || '{"message_id":"out-of-order-first","message_text":"My ad enquiry","timestamp":1789600000,"ad_id":"12345678"}';
+  later := '{"phone_number_id":"987654","waba_id":"123456","message_id":"out-of-order-later","sender_id":"out-of-order-customer","message_type":"text","message_text":"Following up","timestamp":1789600010,"ad_id":"99999999"}';
+  first := later || '{"message_id":"out-of-order-first","message_text":"My ad enquiry","timestamp":1789600000,"ad_id":"12345678","profile_name":"Later available name"}';
   perform public.crm_ingest_whatsapp_message(later);
   result := public.crm_ingest_whatsapp_message(first);
-  assert (select originating_ad_id = '12345678' and first_message = 'My ad enquiry' and destination='Manali' from public.leads where id=(result->>'lead_id')::uuid), 'Out-of-order initial ad was lost';
+  assert (select originating_ad_id = '12345678' and first_message = 'My ad enquiry' and destination is null and advertised_destination='Manali' and contact_name='Later available name' from public.crm_lead_inbox where id=(result->>'lead_id')::uuid), 'Out-of-order attribution or later profile name was lost';
+  update public.contacts set name='Staff-entered name' where id=(select contact_id from public.leads where id=(result->>'lead_id')::uuid);
+  perform public.crm_ingest_whatsapp_message(first || '{"message_id":"out-of-order-followup","timestamp":1789600020,"profile_name":"New profile name"}');
+  assert (select contact_name='Staff-entered name' from public.crm_lead_inbox where id=(result->>'lead_id')::uuid), 'Staff-entered name was overwritten';
 end $$;
 -- Confirm RLS uses verified identities, not old self-created memberships.
 set local role authenticated;

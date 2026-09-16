@@ -3,6 +3,18 @@ import { bodyJson, database, databaseConfigured, HttpError, json, organizationId
 const COOKIE = "japs_verified_session";
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+export function authMode(env) {
+  if (env.JAPS_CRM_AUTH_MODE === "email") return "email";
+  if (env.JAPS_CRM_AUTH_MODE === "temporary_password" &&
+      emailPattern.test(env.JAPS_CRM_TEMP_ADMIN_EMAIL || "") &&
+      Date.parse(env.JAPS_CRM_TEMP_ADMIN_EXPIRES_AT || "") > Date.now()) return "temporary_password";
+  return "paused";
+}
+
+function allowedTemporaryAdmin(env, identity) {
+  return String(identity.email || "").toLowerCase() === env.JAPS_CRM_TEMP_ADMIN_EMAIL?.toLowerCase();
+}
+
 function sessionCookie(env, token = "", maxAge = 0) {
   const secure = env.JAPS_CRM_APP_ORIGIN?.startsWith("https://") ? "; Secure" : "";
   return `${COOKIE}=${encodeURIComponent(token)}; HttpOnly; Path=/; SameSite=Strict; Max-Age=${Math.min(maxAge, 3600)}${secure}`;
@@ -20,7 +32,8 @@ async function authRequest(env, path, body, token) {
     });
   } catch { throw new HttpError(503, "Sign-in service unavailable. Please retry."); }
   if (!response.ok) {
-    if (response.status === 429) throw new HttpError(429, "Please wait before requesting another code.");
+    if (response.status === 429) throw new HttpError(429, "Too many sign-in attempts. Please wait and try again.");
+    if (path === "token?grant_type=password") throw new HttpError(401, "Email or password is incorrect, or access is unavailable.");
     if (path === "otp") throw new HttpError(503, "The sign-in email could not be sent. Ask your administrator to check email delivery configuration.");
     throw new HttpError(401, "Sign-in could not be verified. Request a fresh email and try again.");
   }
@@ -41,7 +54,10 @@ function tokenFromCookie(request) {
 }
 
 export async function authenticatedUser(request, env) {
+  const mode = authMode(env);
+  if (mode === "paused") throw new HttpError(401, "Staff sign-in is paused. Customer records remain protected.", "AUTH_PAUSED");
   const identity = await verifiedIdentity(env, tokenFromCookie(request));
+  if (mode === "temporary_password" && !allowedTemporaryAdmin(env, identity)) throw new HttpError(403, "Temporary access is limited to the approved administrator.", "STAFF_ACCESS_DENIED");
   const rows = await database(env, "crm_staff_access", {
     organization_id: `eq.${organizationId(env)}`, auth_user_id: `eq.${identity.id}`, active: "eq.true",
     select: "role,organization_id,profile:profiles(id,name,email,phone)", limit: "1",
@@ -49,6 +65,7 @@ export async function authenticatedUser(request, env) {
   const row = rows?.[0];
   const profile = Array.isArray(row?.profile) ? row.profile[0] : row?.profile;
   if (!profile?.id) throw new HttpError(403, "This account’s workspace access is unapproved or has been revoked.", "STAFF_ACCESS_DENIED");
+  if (mode === "temporary_password" && !["Admin", "Owner"].includes(row.role)) throw new HttpError(403, "Administrator access required.", "STAFF_ACCESS_DENIED");
   return { ...profile, role: row.role, organization_id: row.organization_id };
 }
 
@@ -58,6 +75,11 @@ export async function handleAuth(request, env, path) {
     const token = tokenFromCookie(request);
     if (token) { try { await authRequest(env, "logout?scope=local", {}, token); } catch { /* Cookie clearing must still work after expiry. */ } }
     return json({ ok: true }, 200, { "Set-Cookie": sessionCookie(env) });
+  }
+  const mode = authMode(env);
+  const passwordLogin = path === "/api/auth/password";
+  if (mode === "paused" || (passwordLogin ? mode !== "temporary_password" : mode !== "email")) {
+    throw new HttpError(503, "This sign-in method is paused. Reload the CRM to see the available access method.");
   }
   const body = await bodyJson(request);
   if (path === "/api/auth/request-code") {
@@ -74,7 +96,16 @@ export async function handleAuth(request, env, path) {
   }
   let accessToken;
   let maxAge = 3600;
-  if (path === "/api/auth/verify-code") {
+  if (passwordLogin) {
+    const email = String(body.email || "").trim().toLowerCase();
+    if (!allowedTemporaryAdmin(env, { email }) || typeof body.password !== "string" || body.password.length < 12 || body.password.length > 256) {
+      throw new HttpError(401, "Email or password is incorrect, or access is unavailable.");
+    }
+    // Supabase owns password hashing, rate limiting and session issuance. No
+    // password or refresh token is stored in this app or returned to the browser.
+    const verified = await authRequest(env, "token?grant_type=password", { email, password: body.password });
+    accessToken = verified.access_token; maxAge = verified.expires_in || 3600;
+  } else if (path === "/api/auth/verify-code") {
     const email = String(body.email || "").trim().toLowerCase();
     const token = String(body.code || "").trim();
     if (!emailPattern.test(email) || !/^\d{6,10}$/.test(token)) throw new HttpError(400, "Enter the email and code from your sign-in email.");
@@ -84,8 +115,10 @@ export async function handleAuth(request, env, path) {
     throw new HttpError(404, "Not found.");
   }
   const identity = await verifiedIdentity(env, accessToken);
+  if (passwordLogin && !allowedTemporaryAdmin(env, identity)) throw new HttpError(403, "Administrator access required.");
   // This function independently checks auth.users + the approved staff table.
   const user = await rpc(env, "crm_bind_verified_staff", { p_auth_user_id: identity.id, p_organization_id: organizationId(env) });
   if (!user?.id) throw new HttpError(403, "This account is not approved for Japs_CRM.");
+  if (passwordLogin && !["Admin", "Owner"].includes(user.role)) throw new HttpError(403, "Administrator access required.");
   return json({ ok: true, user }, 200, { "Set-Cookie": sessionCookie(env, accessToken, maxAge) });
 }
