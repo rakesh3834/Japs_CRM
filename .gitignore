@@ -2,6 +2,7 @@ frontend/node_modules/
 .worker-build/
 frontend/dist/
 dist/
+.github-pages-dist/
 backend/.venv/
 backend/**/__pycache__/
 .wrangler/
