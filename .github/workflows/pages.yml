@@ -29,11 +29,18 @@ jobs:
       - name: Configure Pages
         uses: actions/configure-pages@v5
 
-      - name: Upload redirect artifact
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build approved public policies and redirect
+        run: node scripts/build-github-pages.mjs
+
+      - name: Upload public pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: github-pages
+          path: .github-pages-dist
 
-      - name: Deploy redirect to GitHub Pages
+      - name: Deploy public policies and redirect to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
