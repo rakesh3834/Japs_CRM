@@ -93,6 +93,12 @@ test("approved privacy and deletion instructions are public without customer acc
     const html = await response.text();
     assert.match(html, /Travel with Japs/); assert.match(html, /contactjapstours@gmail.com/);
     assert.equal(response.headers.get("Cache-Control"), "no-cache");
+    for (const suffix of ["", "/"]) {
+      const head = await worker.fetch(new Request(`https://crm.example/${route}${suffix}`, { method: "HEAD" }), {});
+      assert.equal(head.status, 200);
+      assert.deepEqual([...head.headers], [...response.headers]);
+      assert.equal(await head.text(), "");
+    }
   }
 });
 

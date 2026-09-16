@@ -10,7 +10,10 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const policy = policyResponse(url.pathname);
-    if (policy && request.method === "GET") return policy;
+    if (policy && ["GET", "HEAD"].includes(request.method)) {
+      // URL validators may check headers before fetching the public document.
+      return request.method === "HEAD" ? new Response(null, { status: policy.status, headers: policy.headers }) : policy;
+    }
     if (url.pathname.startsWith("/api/")) {
       return handleApi(request, env, url, ctx);
     }
