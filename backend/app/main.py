@@ -43,6 +43,12 @@ class Settings(BaseModel):
 
 settings = Settings()
 
+# This original prototype used unverified self-declared identities. It must not
+# run against customer data. Production and local development now use the same
+# verified Worker (`npm run dev:api`). Keep this file only for isolated demos.
+if settings.supabase_url or settings.supabase_service_role_key or not settings.allow_demo:
+    raise RuntimeError("Legacy demo backend disabled with real data. Run npm run dev:api instead.")
+
 
 class LoginRequest(BaseModel):
     name: str = Field(min_length=2, max_length=120)

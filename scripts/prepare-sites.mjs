@@ -20,7 +20,8 @@ async function collect(directory, prefix = "") {
   }
 }
 await collect(source);
-const workerSource = await readFile(resolve(root, "worker", "index.js"), "utf8");
-const generatedWorker = workerSource.replace("const STATIC_ASSETS = {};", `const STATIC_ASSETS = ${JSON.stringify(assets)};`);
+const workerSource = await readFile(resolve(root, ".worker-build", "index.js"), "utf8");
+if (!workerSource.includes('"__JAPS_STATIC_ASSETS__"')) throw new Error("Worker asset marker missing");
+const generatedWorker = workerSource.replace('"__JAPS_STATIC_ASSETS__"', () => JSON.stringify(JSON.stringify(assets)));
 await writeFile(resolve(output, "server", "index.js"), generatedWorker);
 console.log(`Prepared ${output} for Sites hosting.`);

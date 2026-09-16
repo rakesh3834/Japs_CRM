@@ -122,3 +122,22 @@ button { cursor: pointer; }
   .toast { bottom: 78px; width: calc(100% - 32px); justify-content: center; text-align: center; }
 }
 @media (max-width: 380px) { .page-heading { flex-direction: column; gap: 13px; }.page-heading .primary-button { align-self: flex-start; font-size: 12px; }.metric-card { min-height: 115px; }.metric-value { font-size: 20px; }.action-meta { display: none; }.trip-dates { font-size: 10px; }.operations-filter .segmented-control { margin-left: 0; }.operations-filter .secondary-button { margin-left: auto; } }
+/* Verified staff entry and live attribution extend the existing visual system. */
+.verified-login { min-height: 100dvh; display: grid; place-items: center; padding: 24px; background: #f6f7fb; }
+.verified-login-card { width: min(100%, 460px); padding: 32px; }
+.verified-login-card h1 { margin: 20px 0 10px; }
+.verified-login-card .eyebrow { margin-top: 20px; }
+.verified-login-card p { line-height: 1.65; }
+.verified-login-card .modal-form { padding: 20px 0; }
+.integration-notice { padding: 14px 18px; border-radius: 10px; background: #fff5de; color: #694915; line-height: 1.5; font-size: 13px; }
+.integration-panel { max-width: 960px; }
+.integration-panel p, .integration-panel code { overflow-wrap: anywhere; }
+.integration-panel p { line-height: 1.6; }
+.integration-actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 22px 0; }
+.integration-panel details { margin-top: 20px; }
+.integration-panel summary, .lead-attribution summary { cursor: pointer; font-weight: 600; }
+.lead-attribution { padding: 10px 24px 16px; border-bottom: 1px solid #edf0f4; font-size: 12px; line-height: 1.55; background: #fafbfe; overflow-wrap: anywhere; }
+.lead-attribution dl { display: grid; grid-template-columns: minmax(100px, 180px) minmax(0, 1fr); gap: 6px 14px; }
+.lead-attribution dt { color: #6f7485; }
+.lead-attribution dd { margin: 0; white-space: pre-wrap; }
+@media (max-width: 600px) { .verified-login-card { padding: 22px; } .lead-attribution { padding: 12px; } .lead-attribution dl { display: block; } .lead-attribution dd { margin-bottom: 9px; } }

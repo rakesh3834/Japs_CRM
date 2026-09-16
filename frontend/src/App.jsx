@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { LoginScreen, IntegrationSettings } from "./VerifiedAccess.jsx";
 import {
   ArrowDownRight,
   ArrowUpRight,
@@ -38,7 +39,7 @@ import {
 
 const navItems = [
   { label: "Command center", icon: LayoutDashboard },
-  { label: "Leads", icon: ContactRound, badge: "42" },
+  { label: "Leads", icon: ContactRound },
   { label: "Trips", icon: Compass },
   { label: "Operations", icon: CalendarDays },
   { label: "Money", icon: CircleDollarSign },
@@ -91,20 +92,24 @@ const departures = [
 ];
 
 const formatINR = (value) => `₹${new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 }).format(value)}`;
-// Local development keeps the separate FastAPI port. In a hosted build the
-// worker serves both the static app and /api/*, so use same-origin requests.
-const API_BASE = import.meta.env.VITE_API_BASE_URL || (
-  typeof window !== "undefined" && window.location.port === "5173" ? "http://localhost:8000" : ""
-);
+// The same Worker handles production and Vite's local /api proxy.
+const API_BASE = "";
+let sessionEpoch = 0;
 
 async function apiRequest(path, options = {}) {
+  const epoch = sessionEpoch;
   const response = await fetch(`${API_BASE}${path}`, {
     credentials: "include",
     headers: { "Content-Type": "application/json", ...(options.headers || {}) },
     ...options,
   });
-  if (!response.ok) throw new Error(`API request failed (${response.status})`);
-  return response.json();
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    if (epoch === sessionEpoch && (response.status === 401 || result.code === "STAFF_ACCESS_DENIED") && !path.startsWith("/api/auth/")) window.dispatchEvent(new Event("crm-session-expired"));
+    const error = new Error(result.error || result.detail || `API request failed (${response.status})`);
+    error.status = response.status; throw error;
+  }
+  return result;
 }
 
 function App() {
@@ -113,37 +118,80 @@ function App() {
   const [search, setSearch] = useState("");
   const [showQuickAdd, setShowQuickAdd] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
-  const [showLogin, setShowLogin] = useState(false);
-  const [currentUser, setCurrentUser] = useState({ name: "Aarav Mehta", email: "ops@japstravels.in", phone: "+91 98765 43210", role: "Admin" });
+  const [currentUser, setCurrentUser] = useState(null);
+  const [checkingAuth, setCheckingAuth] = useState(true);
+  const [authError, setAuthError] = useState("");
+  const generation = useRef(0);
   const [dashboardData, setDashboardData] = useState(null);
-  const [contactsData, setContactsData] = useState(null);
-  const [suppliersData, setSuppliersData] = useState(null);
-  const [dataStatus, setDataStatus] = useState("Connecting to FastAPI");
-  const effectiveDataStatus = dashboardData?.source === "supabase" ? "Supabase connected" : dataStatus;
+  const [contactsData, setContactsData] = useState([]);
+  const [suppliersData, setSuppliersData] = useState([]);
+  const [leadsData, setLeadsData] = useState([]);
+  const [nextOffset, setNextOffset] = useState(null);
+  const [dataStatus, setDataStatus] = useState("Waiting for sign-in");
+  const effectiveDataStatus = dataStatus;
 
   const loadDashboard = async () => {
+    const session = generation.current;
     try {
-      const result = await apiRequest("/api/dashboard");
+      const [result, leads] = await Promise.all([apiRequest("/api/dashboard"), apiRequest("/api/leads")]);
+      if (session !== generation.current) return;
       setDashboardData(result);
-      setDataStatus(result.source === "supabase" ? "Supabase connected" : "Demo data · Supabase not configured");
-    } catch {
-      setDataStatus("Demo data · FastAPI offline");
+      setLeadsData(leads.items); setNextOffset(leads.next_offset);
+      setDataStatus("Supabase connected");
+    } catch (error) {
+      if (session === generation.current) setDataStatus(error.message);
     }
   };
 
   const loadWorkspaceModules = async () => {
+    const session = generation.current;
     try {
       const [contacts, suppliers] = await Promise.all([apiRequest("/api/contacts"), apiRequest("/api/suppliers")]);
-      setContactsData(contacts.source === "supabase" ? contacts.items : null);
-      setSuppliersData(suppliers.source === "supabase" ? suppliers.items : null);
-    } catch {
-      // Dashboard status already communicates when FastAPI is offline.
-    }
+      if (session !== generation.current) return;
+      setContactsData(contacts.items || []); setSuppliersData(suppliers.items || []);
+    } catch (error) { if (session === generation.current) setDataStatus(error.message); }
   };
 
-  useEffect(() => { void loadDashboard(); void loadWorkspaceModules(); }, []);
   const [selectedTrip, setSelectedTrip] = useState(null);
   const [toast, setToast] = useState("");
+  function clearSession() {
+    sessionEpoch++; generation.current++; setCurrentUser(null); setDashboardData(null); setLeadsData([]);
+    setContactsData([]); setSuppliersData([]); setNextOffset(null); setSelectedTrip(null);
+    setShowQuickAdd(false); setShowProfile(false); setSearch(""); setToast(""); setActive("Command center");
+    setDataStatus("Please sign in");
+  }
+  async function signOut() {
+    setCheckingAuth(true); clearSession();
+    try { await apiRequest("/api/auth/logout", { method: "POST", body: "{}" }); }
+    catch { setAuthError("Could not contact sign-out service. Close this browser session if you are on a shared device."); }
+    finally { setCheckingAuth(false); }
+  }
+  useEffect(() => {
+    const expired = () => { clearSession(); setAuthError("Your session expired. Please sign in again."); };
+    window.addEventListener("crm-session-expired", expired);
+    let cancelled = false;
+    apiRequest("/api/me").then((result) => { if (!cancelled) { setCurrentUser(result.user); setAuthError(""); } })
+      .catch((error) => { if (!cancelled) setAuthError(error.status === 401 ? "" : error.message); })
+      .finally(() => { if (!cancelled) setCheckingAuth(false); });
+    return () => { cancelled = true; window.removeEventListener("crm-session-expired", expired); };
+  }, []);
+  useEffect(() => {
+    if (!currentUser) return;
+    void loadDashboard(); void loadWorkspaceModules();
+    const check = () => { if (!document.hidden) void apiRequest("/api/me").catch(() => {}); };
+    const interval = window.setInterval(check, 60000);
+    document.addEventListener("visibilitychange", check);
+    return () => { window.clearInterval(interval); document.removeEventListener("visibilitychange", check); };
+  }, [currentUser]);
+  async function loadMoreLeads() {
+    const session = generation.current;
+    try {
+      const result = await apiRequest(`/api/leads?offset=${nextOffset}`);
+      if (session !== generation.current) return;
+      setLeadsData((current) => [...new Map([...current, ...result.items].map((lead) => [lead.uuid, lead])).values()]);
+      setNextOffset(result.next_offset);
+    } catch (error) { setToast(error.message); }
+  }
 
   useEffect(() => {
     if (!toast) return;
@@ -152,17 +200,19 @@ function App() {
   }, [toast]);
 
   const filteredLeads = useMemo(() => {
-    const leadSource = dashboardData?.leads || sampleLeads;
+    const leadSource = leadsData;
     const query = search.trim().toLowerCase();
     if (!query) return leadSource;
-    return leadSource.filter((lead) => `${lead.name} ${lead.destination} ${lead.source} ${lead.id}`.toLowerCase().includes(query));
-  }, [dashboardData, search]);
+    return leadSource.filter((lead) => `${lead.name} ${lead.phone} ${lead.destination} ${lead.source} ${lead.id} ${lead.campaign_name || ""} ${lead.first_message || ""}`.toLowerCase().includes(query));
+  }, [leadsData, search]);
 
   const navigate = (label) => {
     setActive(label);
     setSidebarOpen(false);
     setSelectedTrip(null);
   };
+
+  if (!currentUser) return <LoginScreen api={apiRequest} checking={checkingAuth} initialError={authError} onSignedIn={(user) => { sessionEpoch++; generation.current++; setCurrentUser(user); setAuthError(""); }} />;
 
   return (
     <div className="app-shell">
@@ -208,22 +258,22 @@ function App() {
             <button className="icon-button notification-button" aria-label="Notifications" onClick={() => setToast("You have 4 actions waiting for you.")}><Bell size={18} /><span className="notification-dot" /></button>
             <div className="profile-wrap">
               <button className="profile-chip" onClick={() => setShowProfile((value) => !value)}><span className="profile-avatar">{currentUser.name.split(" ").map((part) => part[0]).join("").slice(0, 2).toUpperCase()}</span><span className="profile-text"><strong>{currentUser.name}</strong><small>{currentUser.role}</small></span><ChevronDown size={14} /></button>
-              {showProfile && <div className="profile-menu"><div className="profile-menu-head"><span className="profile-avatar large">{currentUser.name.split(" ").map((part) => part[0]).join("").slice(0, 2).toUpperCase()}</span><div><strong>{currentUser.name}</strong><small>{currentUser.email}</small></div></div><div className="profile-menu-line"><span className="status-dot green" /> Trusted login · Japs Travels</div><button onClick={() => { setShowProfile(false); setShowLogin(true); }}><UsersRound size={15} /> Switch profile</button><button onClick={() => setToast("Sign out will be enabled after verified Supabase Auth is connected.")}><LogOut size={15} /> Sign out</button></div>}
+              {showProfile && <div className="profile-menu"><div className="profile-menu-head"><span className="profile-avatar large"><ShieldCheck size={22} /></span><div><strong>{currentUser.name}</strong><small>{currentUser.email}</small></div></div><div className="profile-menu-line"><span className="status-dot green" /> Verified staff · Japs Travels</div><button onClick={signOut}><LogOut size={15} /> Sign out / switch account</button></div>}
             </div>
           </div>
         </header>
 
         <div className="page-content">
           {active === "Command center" && <Dashboard data={dashboardData} currentUser={currentUser} onQuickAdd={() => setShowQuickAdd(true)} onTrip={setSelectedTrip} onNavigate={navigate} />}
-          {active === "Leads" && <LeadsView leads={filteredLeads} onQuickAdd={() => setShowQuickAdd(true)} onToast={setToast} />}
-          {active === "Trips" && <TripsView trips={dashboardData?.trips} onTrip={setSelectedTrip} />}
-          {active === "Operations" && <OperationsView onTrip={setSelectedTrip} />}
-          {active === "Money" && <MoneyView payments={dashboardData?.payments} onToast={setToast} onSaved={loadDashboard} />}
+          {active === "Leads" && <LeadsView leads={filteredLeads} onQuickAdd={() => setShowQuickAdd(true)} onToast={setToast} onRefresh={loadDashboard} onMore={nextOffset !== null ? loadMoreLeads : null} />}
+          {active === "Trips" && <TripsView trips={dashboardData?.trips || []} onTrip={setSelectedTrip} />}
+          {active === "Operations" && <><p className="integration-notice">Design preview — these sample operations are not live customer records.</p><OperationsView onTrip={setSelectedTrip} /></>}
+          {active === "Money" && <><p className="integration-notice">The payment timeline is live. Summary metrics and margin examples below are design previews.</p><MoneyView payments={dashboardData?.payments || []} onToast={setToast} onSaved={loadDashboard} /></>}
           {active === "Contacts" && <ContactsView contacts={contactsData} onToast={setToast} />}
           {active === "Suppliers" && <SuppliersView suppliers={suppliersData} onToast={setToast} />}
-          {active === "Reports" && <ReportsView onToast={setToast} />}
+          {active === "Reports" && <><p className="integration-notice">Design preview — these sample reports are not live business results.</p><ReportsView onToast={setToast} /></>}
           {active === "Library" && <LibraryView onToast={setToast} />}
-          {active === "Settings" && <SettingsView dataStatus={effectiveDataStatus} onToast={setToast} />}
+          {active === "Settings" && <><PageHeading eyebrow="Workspace controls" title="Settings" description="Verified staff access and WhatsApp integration readiness." /><IntegrationSettings api={apiRequest} user={currentUser} /></>}
         </div>
         <footer className="page-footer"><span><span className={`status-dot ${effectiveDataStatus.includes("connected") ? "green" : "amber"}`} /> {effectiveDataStatus}</span><span>INR · 5% tax default</span><span>Japs_CRM v0.1</span></footer>
       </main>
@@ -232,8 +282,7 @@ function App() {
         {navItems.slice(0, 5).map(({ label, icon: Icon }) => <button key={label} className={active === label ? "active" : ""} onClick={() => navigate(label)}><Icon size={19} /><span>{label === "Command center" ? "Home" : label}</span></button>)}
       </div>
 
-      {showQuickAdd && <QuickAddModal onClose={() => setShowQuickAdd(false)} onSave={async (form) => { try { const result = await apiRequest("/api/leads", { method: "POST", body: JSON.stringify({ name: form.name, phone: form.phone, email: form.email || null, destination: form.destination, source: form.source, start_date: form.startDate || null, travelers: Number(form.travelers || 2), notes: form.notes }) }); await loadDashboard(); setToast(result.synced ? "New lead saved to Supabase." : "New lead saved to your workspace."); } catch { setToast("Demo lead saved locally. Connect FastAPI to sync it."); } finally { setShowQuickAdd(false); } }} />}
-      {showLogin && <LoginModal onClose={() => setShowLogin(false)} onSave={(user) => { setCurrentUser(user); setShowLogin(false); void loadDashboard(); void loadWorkspaceModules(); setToast(`Welcome, ${user.name.split(" ")[0]}.`); }} />}
+      {showQuickAdd && <QuickAddModal onClose={() => setShowQuickAdd(false)} onSave={async (form) => { try { await apiRequest("/api/leads", { method: "POST", body: JSON.stringify({ name: form.name, phone: form.phone, email: form.email || null, destination: form.destination, source: form.source, start_date: form.startDate || null, travelers: Number(form.travelers || 2), notes: form.notes }) }); await loadDashboard(); setToast("New lead saved to Supabase."); setShowQuickAdd(false); } catch (error) { setToast(`Not saved: ${error.message}`); } }} />}
       {selectedTrip && <TripDrawer trip={selectedTrip} onClose={() => setSelectedTrip(null)} onToast={setToast} />}
       {toast && <div className="toast"><CircleCheck size={17} /> {toast}</div>}
     </div>
@@ -245,18 +294,19 @@ function PageHeading({ eyebrow, title, description, action, actionLabel = "New l
 }
 
 function Dashboard({ data, currentUser, onQuickAdd, onTrip, onNavigate }) {
-  const leads = data?.leads || sampleLeads;
-  const trips = data?.trips || sampleTrips;
-  const stats = data?.stats || { open_enquiries: 42, active_trips: 18, customer_due: 240000, margin_at_risk: 3 };
+  const leads = data?.leads || [];
+  const trips = data?.trips || [];
+  const stats = data?.stats || { open_enquiries: 0, active_trips: 0, customer_due: 0, margin_at_risk: 0 };
   return <>
-    <PageHeading eyebrow="Sunday, 30 August 2026" title={`Good morning, ${(currentUser?.name || "Aarav Mehta").split(" ")[0]}`} description="Here is what needs your attention across Japs Travels today." action={onQuickAdd} actionLabel="Add lead" />
-    <div className="insight-banner"><div className="insight-icon"><Sparkles size={18} /></div><div><strong>Your team is 18% faster this week.</strong><span>Response time is down and 6 more enquiries reached proposal stage.</span></div><button onClick={() => onNavigate("Reports")}>View insight <ArrowUpRight size={15} /></button></div>
+    <PageHeading eyebrow={new Date().toLocaleDateString("en-IN", { dateStyle: "full" })} title={`Welcome, ${(currentUser?.name || "Team").split(" ")[0]}`} description="Review incoming enquiries and your agency’s saved records." action={onQuickAdd} actionLabel="Add lead" />
+    <div className="insight-banner"><div className="insight-icon"><MessageCircle size={18} /></div><div><strong>WhatsApp lead capture</strong><span>Check connection readiness and campaign lookup access in Settings.</span></div><button onClick={() => onNavigate("Settings")}>Integration settings <ArrowUpRight size={15} /></button></div>
     <section className="metric-grid">
       <MetricCard label="Open enquiries" value={stats.open_enquiries} change="12%" direction="up" hint="vs last week" icon={ContactRound} tone="lilac" />
       <MetricCard label="Active trips" value={stats.active_trips} change="4" direction="up" hint="this month" icon={Compass} tone="mint" />
       <MetricCard label="Customer due" value={formatINR(stats.customer_due)} change="3 overdue" direction="down" hint="needs attention" icon={CircleDollarSign} tone="peach" />
       <MetricCard label="Margin at risk" value={`${stats.margin_at_risk} trips`} change="Review" direction="down" hint="before confirming" icon={CircleAlert} tone="rose" />
     </section>
+    <p className="integration-notice">Metrics above and recent leads below use saved records. The actions, departures, pipeline and health panels are design previews.</p>
     <div className="dashboard-grid">
       <section className="card action-card"><CardHeader title="Your next actions" subtitle="Small moves that keep every trip on track" action="See all" onAction={() => onNavigate("Leads")} /><div className="action-list">{actionItems.map((item) => <ActionRow key={item.title} {...item} />)}</div></section>
       <section className="card departures-card"><CardHeader title="Upcoming departures" subtitle="The next 14 days" action="Open calendar" onAction={() => onNavigate("Operations")} /><div className="departure-list">{departures.map((departure) => <DepartureRow key={departure.destination + departure.date} {...departure} onClick={() => onTrip(trips.find((trip) => trip.destination === departure.destination) || sampleTrips.find((trip) => trip.destination === departure.destination))} />)}</div></section>
@@ -269,13 +319,13 @@ function Dashboard({ data, currentUser, onQuickAdd, onTrip, onNavigate }) {
   </>;
 }
 
-function LeadsView({ leads, onQuickAdd, onToast }) {
+function LeadsView({ leads, onQuickAdd, onToast, onRefresh, onMore }) {
   const [filter, setFilter] = useState("All leads");
   const visible = filter === "All leads" ? leads : leads.filter((lead) => lead.status === filter);
   return <>
     <PageHeading eyebrow="Sales workspace" title="Leads" description="Turn every enquiry into a clear next step." action={onQuickAdd} actionLabel="Add lead" />
-    <div className="filter-row"><div className="segmented-control">{["All leads", "Proposal", "Qualified", "Negotiation", "Nurture"].map((item) => <button key={item} className={filter === item ? "selected" : ""} onClick={() => setFilter(item)}>{item}{item === "All leads" && <span>42</span>}</button>)}</div><button className="secondary-button"><Filter size={15} /> Filters</button><button className="secondary-button hide-mobile"><ClipboardList size={15} /> Saved views</button></div>
-    <section className="card leads-page-card"><div className="list-toolbar"><div><strong>{visible.length} leads</strong><span> · sorted by next action</span></div><button className="text-button" onClick={() => onToast("Lead distribution rules are ready to configure.")}><Sparkles size={15} /> Smart assignment</button></div><div className="lead-table desktop-table"><div className="table-head"><span>Lead</span><span>Trip plan</span><span>Value</span><span>Stage</span><span>Next action</span><span /></div>{visible.map((lead) => <LeadRow key={lead.id} lead={lead} />)}</div><div className="mobile-stack">{visible.map((lead) => <LeadCard key={lead.id} lead={lead} />)}</div></section>
+    <div className="filter-row"><div className="segmented-control">{["All leads", "Inbox", "Proposal", "Qualified", "Negotiation", "Nurture"].map((item) => <button key={item} className={filter === item ? "selected" : ""} onClick={() => setFilter(item)}>{item}{item === "All leads" && <span>{leads.length}</span>}</button>)}</div><button className="secondary-button" onClick={onRefresh}>Refresh enquiries</button></div>
+    <section className="card leads-page-card"><div className="list-toolbar"><div><strong>{visible.length} loaded leads</strong><span> · newest first · search filters loaded records</span></div></div><div className="lead-table desktop-table"><div className="table-head"><span>Lead</span><span>Trip plan</span><span>Value</span><span>Stage</span><span>Next action</span><span /></div>{visible.map((lead) => <LeadRow key={lead.id} lead={lead} />)}</div><div className="mobile-stack">{visible.map((lead) => <LeadCard key={lead.id} lead={lead} />)}</div>{visible.length === 0 && <p className="integration-notice">No matching enquiries loaded. Check Settings for WhatsApp connection readiness.</p>}{onMore && <button className="secondary-button" onClick={onMore}>Load older leads</button>}</section>
   </>;
 }
 
@@ -325,9 +375,6 @@ function LibraryView({ onToast }) {
   return <><PageHeading eyebrow="Files & templates" title="Library" description="Keep the documents your team sends most often close to the work." action={() => onToast("Upload will connect to Supabase Storage in the next release.")} actionLabel="Upload file" /><section className="module-grid library-grid">{files.map(({ icon: Icon, title, meta, kind }) => <button className="module-card library-card" key={title} onClick={() => onToast(`${title} opened.`)}><span className="library-icon"><Icon size={18} /></span><span className="module-card-copy"><strong>{title}</strong><small>{meta}</small></span><span className="library-kind">{kind}</span><ChevronRight size={16} /></button>)}</section><section className="card library-note"><Sparkles size={17} /><div><strong>Keep every handoff polished.</strong><span>Quote, voucher, receipt, and itinerary files will share the same trip timeline.</span></div></section></>;
 }
 
-function SettingsView({ dataStatus, onToast }) {
-  return <><PageHeading eyebrow="Workspace controls" title="Settings" description="Japs_CRM defaults are visible here so the team knows how money and access work." /><div className="settings-grid"><section className="card settings-card"><CardHeader title="Workspace defaults" subtitle="Applied to new quotes and payment records" /><div className="settings-list"><div><span>Brand</span><strong>Japs_CRM · Japs Travels</strong></div><div><span>Currency</span><strong>INR · Indian Rupee</strong></div><div><span>Tax rate</span><strong>5% GST default</strong></div><div><span>Payment mode</span><strong>Tracking only · no gateway</strong></div></div><button className="secondary-button" onClick={() => onToast("Workspace defaults are ready for admin editing.")}>Edit defaults</button></section><section className="card settings-card"><CardHeader title="Connection & access" subtitle="Current local environment status" /><div className="settings-status"><span className={`status-dot ${dataStatus.includes("connected") ? "green" : "amber"}`} /><strong>{dataStatus}</strong></div><p className="settings-copy">The FastAPI service owns sessions and talks to Supabase with a server-only service key. This internal MVP accepts name, email, and phone without OTP.</p><button className="secondary-button" onClick={() => onToast("Use the profile menu to switch trusted team profiles.")}><ShieldCheck size={15} /> Review access note</button></section></div></>;
-}
 
 function PlaceholderView({ title, onToast }) {
   return <div className="placeholder-view"><div className="placeholder-art"><Compass size={30} /></div><div className="eyebrow">Japs_CRM workspace</div><h1>{title}</h1><p>This workspace is mapped in the product blueprint and will connect to the same trip record. Start with the live command center while we wire the next module.</p><button className="primary-button" onClick={() => onToast(`${title} is queued for the next build slice.`)}><Sparkles size={16} /> Show me the next release</button></div>;
@@ -354,11 +401,23 @@ function PipelineBar({ label, value, percent, tone, count }) {
 }
 
 function LeadRow({ lead }) {
-  return <div className="table-row"><span className="lead-person"><span className={`initials ${lead.color}`}>{lead.initials}</span><span><strong>{lead.name}</strong><small>{lead.id} · {lead.source}</small></span></span><span className="trip-plan"><strong>{lead.destination}</strong><small>{lead.dates} · {lead.travelers}</small></span><span className="lead-value">{formatINR(lead.value)}</span><span><span className={`stage-pill stage-${lead.status.toLowerCase()}`}>{lead.status}</span></span><span className="next-action"><strong>{lead.next}</strong><small>{lead.owner}</small></span><button className="row-more" aria-label={`More options for ${lead.name}`}><MoreHorizontal size={17} /></button></div>;
+  return <><div className="table-row"><span className="lead-person"><span className={`initials ${lead.color || "mint"}`}>{lead.initials || lead.name.slice(0, 2).toUpperCase()}</span><span><strong>{lead.name}</strong><small>{lead.phone || "Phone not supplied"} · {lead.source}</small></span></span><span className="trip-plan"><strong>{lead.destination}</strong><small>{lead.dates} · {lead.travelers}</small></span><span className="lead-value">{formatINR(lead.value)}</span><span><span className={`stage-pill stage-${lead.status.toLowerCase()}`}>{lead.status}</span></span><span className="next-action"><strong>{lead.next}</strong><small>{lead.owner}</small></span><span /></div><LeadAttribution lead={lead} /></>;
 }
 
 function LeadCard({ lead }) {
-  return <article className="lead-card"><div className="lead-card-top"><span className={`initials ${lead.color}`}>{lead.initials}</span><div><strong>{lead.name}</strong><small>{lead.id} · {lead.source}</small></div><span className={`stage-pill stage-${lead.status.toLowerCase()}`}>{lead.status}</span></div><div className="lead-card-details"><span><Compass size={14} /> {lead.destination}</span><span><CalendarDays size={14} /> {lead.dates}</span><strong>{formatINR(lead.value)}</strong></div><div className="lead-card-foot"><span>Next: {lead.next}</span><span>{lead.owner}</span></div></article>;
+  return <article className="lead-card"><div className="lead-card-top"><span className={`initials ${lead.color || "mint"}`}>{lead.initials || lead.name.slice(0, 2).toUpperCase()}</span><div><strong>{lead.name}</strong><small>{lead.phone || "Phone not supplied"} · {lead.source}</small></div><span className={`stage-pill stage-${lead.status.toLowerCase()}`}>{lead.status}</span></div><div className="lead-card-details"><span><Compass size={14} /> {lead.destination}</span><span><CalendarDays size={14} /> {lead.dates}</span><strong>{formatINR(lead.value)}</strong></div><LeadAttribution lead={lead} /><div className="lead-card-foot"><span>Next: {lead.next}</span><span>{lead.owner}</span></div></article>;
+}
+
+function LeadAttribution({ lead }) {
+  if (!lead.ad_id && !lead.first_message) return null;
+  return <details className="lead-attribution"><summary>{lead.campaign_name || (lead.ad_id ? "Campaign lookup pending" : "WhatsApp enquiry")} · {lead.source_platform || "Click platform unknown"}</summary>
+    <dl><dt>Customer’s first message</dt><dd>{lead.first_message || "Non-text message — check WhatsApp"}</dd>
+      <dt>Ad</dt><dd>{lead.ad_name || "Not yet available"}{lead.ad_id ? ` · ${lead.ad_id}` : ""}</dd>
+      <dt>Campaign / ad set</dt><dd>{lead.campaign_name || "Not yet available"} / {lead.adset_name || "Not yet available"}</dd>
+      <dt>Advertised package / event</dt><dd>{lead.offering_name || "Not mapped"} / {lead.event_reference || "Not mapped"}</dd>
+      <dt>Lead ID</dt><dd>{lead.id}</dd></dl>
+    <small>The WhatsApp display name is not a verified legal name or an Instagram username. Missing click platform is not inferred from ad placements.</small>
+  </details>;
 }
 
 function TripCard({ trip, onClick }) {
@@ -386,23 +445,6 @@ function QuickAddModal({ onClose, onSave }) {
 
 function Field({ label, required, children }) { return <label className="field"><span>{label}{required && <em> *</em>}</span>{children}</label>; }
 
-function LoginModal({ onClose, onSave }) {
-  const [form, setForm] = useState({ name: "", email: "", phone: "" });
-  const [busy, setBusy] = useState(false);
-  const update = (key) => (event) => setForm((current) => ({ ...current, [key]: event.target.value }));
-  const submit = async () => {
-    setBusy(true);
-    try {
-      const result = await apiRequest("/api/auth/login", { method: "POST", body: JSON.stringify(form) });
-      onSave(result.user);
-    } catch {
-      onSave({ ...form, role: "Team member" });
-    } finally {
-      setBusy(false);
-    }
-  };
-  return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><section className="modal quick-add-modal" role="dialog" aria-modal="true" aria-labelledby="login-title"><div className="modal-head"><div><div className="eyebrow">Japs_CRM workspace</div><h2 id="login-title">Switch profile</h2><p>Use your name, email, and phone to enter this trusted internal workspace.</p></div><button className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></button></div><div className="modal-form"><Field label="Your name" required><input autoFocus value={form.name} onChange={update("name")} placeholder="e.g. Priya Sharma" /></Field><Field label="Work email" required><input type="email" value={form.email} onChange={update("email")} placeholder="you@agency.com" /></Field><Field label="Phone number" required><input value={form.phone} onChange={update("phone")} placeholder="+91 98765 43210" /></Field><div className="form-callout"><ShieldCheck size={16} /><span>No OTP is requested in this MVP. Use this only for your trusted internal team.</span></div><div className="form-actions"><button className="secondary-button" onClick={onClose}>Cancel</button><button className="primary-button" disabled={busy || !form.name || !form.email || !form.phone} onClick={submit}>{busy ? "Connecting..." : "Continue"} <ChevronRight size={16} /></button></div></div></section></div>;
-}
 
 function PaymentModal({ onClose, onToast, onSaved }) {
   const [form, setForm] = useState({ trip_id: "TRP-248", title: "", direction: "in", amount: "", due_date: "", method: "Bank transfer", reference: "" });
