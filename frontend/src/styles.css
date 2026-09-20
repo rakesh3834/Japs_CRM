@@ -123,6 +123,47 @@ button { cursor: pointer; }
 }
 @media (max-width: 380px) { .page-heading { flex-direction: column; gap: 13px; }.page-heading .primary-button { align-self: flex-start; font-size: 12px; }.metric-card { min-height: 115px; }.metric-value { font-size: 20px; }.action-meta { display: none; }.trip-dates { font-size: 10px; }.operations-filter .segmented-control { margin-left: 0; }.operations-filter .secondary-button { margin-left: auto; } }
 /* Verified staff entry and live attribution extend the existing visual system. */
+.record-dialog { border: 1px solid var(--line); border-radius: 18px; padding: 0; width: min(760px, calc(100vw - 28px)); max-height: 90dvh; color: var(--text); background: #fff; box-shadow: 0 24px 80px #142c3533; }
+.record-dialog::backdrop { background: #102d3a88; }
+.record-dialog .modal-head { display: flex; justify-content: space-between; gap: 16px; }
+.record-dialog fieldset { margin: 0; padding: 0; border: 0; min-width: 0; }
+.record-dialog .field > span, .record-dialog input, .record-dialog select, .record-dialog textarea { font-size: 14px; }
+.record-dialog .field { margin-bottom: 16px; }
+.record-dialog .field input, .record-dialog .field select, .record-dialog .field textarea { min-height: 42px; }
+.record-dialog .form-actions { position: sticky; bottom: -18px; background: #fff; padding: 18px 0 0; }
+.record-help { font-size: 14px; line-height: 1.6; color: #647575; }
+.record-source { margin: 20px 0; font-size: 14px; }
+.record-source summary { cursor: pointer; font-weight: 600; }
+.record-facts { font-size: 14px; line-height: 1.6; display: grid; gap: 10px; }
+.record-facts > div { display: grid; grid-template-columns: minmax(100px, 160px) minmax(0, 1fr); gap: 14px; }
+.record-facts dt { color: #617573; }
+.record-facts dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.actionable-metric { text-align: left; font-family: inherit; color: inherit; border: 1px solid var(--line); cursor: pointer; }
+.actionable-metric .metric-label, .actionable-metric .metric-top { font-size: 14px; }
+.actionable-metric:hover, .actionable-row:hover, .record-list-row:hover { background: #edf7f5; }
+button:focus-visible, .actionable-row:focus-visible { outline: 3px solid #398d89; outline-offset: 2px; }
+.actionable-row { cursor: pointer; }
+.record-list-row { width: 100%; display: flex; align-items: center; gap: 18px; padding: 20px 24px; border: 0; border-bottom: 1px solid #edf1f2; background: transparent; text-align: left; color: inherit; font: inherit; font-size: 14px; cursor: pointer; }
+.record-list-row > span:first-child { flex: 1; min-width: 0; }
+.record-list-row strong { font-weight: 650; }
+.record-list-row small { display: block; color: #647775; margin-top: 6px; font-size: 13px; overflow-wrap: anywhere; }
+.record-list-row:disabled { cursor: default; opacity: 1; }
+.record-list-row.selected-record { background: #e7f3f1; box-shadow: inset 3px 0 #287d76; }
+.empty-records { padding: 24px; color: #647775; font-size: 15px; line-height: 1.6; }
+.contact-workspace { display: grid; grid-template-columns: minmax(220px, 0.75fr) minmax(0, 1.8fr); gap: 20px; margin-top: 20px; align-items: start; }
+.contact-directory { max-height: 75vh; overflow: auto; }
+.contact-detail { overflow-wrap: anywhere; }
+.contact-enquiry { border-top: 1px solid #e6eceb; padding: 24px; font-size: 14px; }
+.contact-enquiry header { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.inset { padding: 0 24px; }
+.preserve-text { white-space: pre-wrap; }
+.trip-amounts { margin-top: 24px; }
+.lead-review-button { margin: 0 0 12px auto; }
+.stage-won { color: #17654c; background: #e3f4ec; }
+.stage-lost { color: #953e3e; background: #fcebec; }
+.filter-row select, .card-header select { min-height: 38px; padding: 6px 12px; border: 1px solid #c8d8d3; border-radius: 8px; color: inherit; background: #fff; font-size: 14px; }
+@media(max-width: 850px) { .contact-workspace { grid-template-columns: 1fr; } .contact-directory { max-height: 320px; } .contact-enquiry header { flex-wrap: wrap; } }
+@media(max-width: 600px) { .record-list-row { padding: 16px; gap: 10px; flex-wrap: wrap; } .record-facts > div { grid-template-columns: 1fr; gap: 2px; } .record-dialog .modal-form { padding: 16px; } .contact-enquiry { padding: 16px; } .record-dialog .modal-head h2 { font-size: 20px; } .actionable-metric .metric-label, .actionable-metric .metric-top { font-size: 14px; } }
 .verified-login { min-height: 100dvh; display: grid; place-items: center; padding: 24px; background: #f6f7fb; }
 .verified-login-card { width: min(100%, 460px); padding: 32px; }
 .verified-login-card h1 { margin: 20px 0 10px; }
