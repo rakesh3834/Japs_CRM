@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import worker from "../worker/index.js";
-import { validSignature, normalizeMessages, enrichAd } from "../worker/whatsapp.js";
+import { validSignature, normalizeMessages, enrichAd, integrationStatus, integrationAction } from "../worker/whatsapp.js";
 
 const env = { SUPABASE_URL: "https://test.supabase.co", SUPABASE_SERVICE_ROLE_KEY: "test-service-key", JAPS_CRM_APP_ORIGIN: "https://crm.example", JAPS_CRM_ORGANIZATION_ID: "00000000-0000-4000-8000-000000000001", META_APP_SECRET: "test-secret", META_WEBHOOK_VERIFY_TOKEN: "test-verify" };
 const path = "/api/webhooks/whatsapp";
@@ -258,6 +258,65 @@ test("successful campaign metadata is cached and cannot be downgraded by retry",
 
 test("malformed and oversized public payloads fail without ingesting data", async () => {
   assert.equal((await worker.fetch(signed(null), env)).status, 400);
-  const large = new Request(`https://crm.example${path}`, { method: "POST", headers: { "content-length": "2000000" }, body: "{}" });
+  const large = new Request(`https://crm.example${path}`, { method: "POST", headers: { "content-length": "4000000" }, body: "{}" });
   assert.equal((await worker.fetch(large, env)).status, 413);
+});
+
+test("username-only senders are captured without inventing phone numbers", () => {
+  const value = payload([{ ...message, from: undefined, from_user_id: "IN.ABC123" }]);
+  value.entry[0].changes[0].value.contacts = [{ user_id: "IN.UNRELATED", profile: { name: "Wrong guest" } }, { user_id: "IN.ABC123", profile: { username: "actual_username" } }];
+  const [normalized] = normalizeMessages(value);
+  assert.equal(normalized.sender_id, "bsuid:IN.ABC123");
+  assert.equal(normalized.user_id, "IN.ABC123");
+  assert.equal(normalized.phone, null);
+  assert.equal(normalized.profile_name, "actual_username");
+  delete value.entry[0].changes[0].value.metadata.display_phone_number;
+  assert.equal(normalizeMessages(value)[0].sender_id, "bsuid:IN.ABC123", "Missing optional display number must not suppress an incoming enquiry");
+  const [known] = normalizeMessages(payload([{ ...message, from_user_id: "IN.ABC123" }]));
+  assert.equal(known.sender_id, message.from, "Existing phone identity must remain stable");
+  assert.equal(normalizeMessages(payload([{ ...message, from: undefined, from_user_id: "invalid" }])).length, 0);
+});
+
+test("delivery diagnostics distinguish ignored, duplicate, error and unmapped events without PII", async (t) => {
+  const logs = []; let call = 0;
+  t.mock.method(console, "warn", (value) => logs.push(JSON.parse(value)));
+  t.mock.method(console, "info", (value) => logs.push(JSON.parse(value)));
+  t.mock.method(globalThis, "fetch", async () => reply([{ accepted: true, duplicate: true }, { accepted: true }, { accepted: false }][call++]));
+  const event = payload([message, { ...message, id: "error", errors: [{ code: 131060 }] }, { ...message, id: "unmapped" }, { ...message, id: "ignore", type: "reaction" }, { id: "missing" }]);
+  event.entry[0].changes[0].value.errors = [{ code: 1, title: "private text" }];
+  assert.equal((await worker.fetch(signed(event), env)).status, 200);
+  assert.equal(logs[0].duplicates, 1); assert.equal(logs[0].stored, 0);
+  assert.equal(logs[0].error_records, 1); assert.equal(logs[0].unmapped, 1);
+  assert.equal(logs[0].ignored, 1); assert.equal(logs[0].missing_identity, 1); assert.equal(logs[0].value_errors, 1);
+  for (const secret of [message.from, message.text.body, "Test Guest", env.META_APP_SECRET, "private text"]) assert.equal(JSON.stringify(logs).includes(secret), false);
+  globalThis.fetch.mock.mockImplementation(async () => reply({}, 503));
+  assert.equal((await worker.fetch(signed(payload([message])), env)).status, 503);
+  assert.equal(logs.at(-1).status, 503);
+});
+
+test("integration health uses successful storage and preserves older error visibility", async (t) => {
+  t.mock.method(globalThis, "fetch", async (url) => {
+    const u = new URL(url);
+    assert.equal(u.searchParams.get("organization_id"), `eq.${env.JAPS_CRM_ORGANIZATION_ID}`);
+    if (u.searchParams.get("error_code") === "not.is.null") return reply([{ error_code: "131060", received_at: "2026-01-01T00:00:00Z" }]);
+    if (u.searchParams.get("lead_id") === "not.is.null") return reply([{ received_at: new Date().toISOString() }]);
+    return reply([]);
+  });
+  const result = await (await integrationStatus(env, { role: "Admin" })).json();
+  assert.equal(result.delivery.recent_delivery_observed, true);
+  assert.equal(result.delivery.completeness_verified, false);
+  assert.equal(result.errors.length, 1);
+  assert.equal(result.live_test_verified, undefined);
+  await assert.rejects(() => integrationStatus(env, { role: "Sales" }));
+});
+
+test("a connected coexistence number does not mask a missing messaging grant", async (t) => {
+  t.mock.method(globalThis, "fetch", async (url) => {
+    const u = new URL(url);
+    if (u.pathname.endsWith("whatsapp_connections")) return reply([{ phone_number_id: "987654" }]);
+    if (u.pathname.endsWith("me/permissions")) return reply({ data: [{ permission: "whatsapp_business_management", status: "granted" }] });
+    return reply({ status: "CONNECTED", is_on_biz_app: true, platform_type: "CLOUD_API" });
+  });
+  const result = await (await integrationAction(new Request("https://crm.example"), { ...env, META_WHATSAPP_ACCESS_TOKEN: "test-token" }, { role: "Admin" }, "check-coexistence")).json();
+  assert.equal(result.coexistence_confirmed, true); assert.equal(result.phone_connected, true); assert.equal(result.messaging_permission_granted, false);
 });

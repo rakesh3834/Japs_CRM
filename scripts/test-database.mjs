@@ -14,7 +14,7 @@ let started = false;
 try {
   run("initdb", ["-D", data, "-A", "trust", "--no-locale"]);
   run("pg_ctl", ["-D", data, "-l", join(directory, "postgres.log"), "-o", `-k ${directory} -p 55439 -h ''`, "-w", "start"]); started = true;
-  for (const file of ["tests/database-fixtures.sql", "supabase/schema.sql", "supabase/migrations/20260917_verified_staff_whatsapp.sql", "supabase/migrations/20260917_whatsapp_profile_attribution.sql", "supabase/bootstrap_verified_admin.sql", "tests/database-assertions.sql"]) {
+  for (const file of ["tests/database-fixtures.sql", "supabase/schema.sql", "supabase/migrations/20260917_verified_staff_whatsapp.sql", "supabase/migrations/20260917_whatsapp_profile_attribution.sql", "supabase/migrations/20260920_whatsapp_sender_identity.sql", "supabase/bootstrap_verified_admin.sql", "tests/database-assertions.sql", "tests/identity-assertions.sql"]) {
     run("psql", [...psql, "-f", resolve(file)]); console.log(`Passed: ${file}`);
   }
   // Real competing transactions: replayed ID plus different messages from one sender.
