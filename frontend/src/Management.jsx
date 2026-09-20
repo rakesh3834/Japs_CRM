@@ -1,25 +1,28 @@
 import { useEffect, useRef, useState } from "react";
 import { ChevronRight, Plus, X } from "lucide-react";
+import { timeInIndia } from "./record-time.js";
 
 export const leadStatuses = ["Inbox", "Qualified", "Discovery", "Proposal", "Negotiation", "Won", "Lost", "Nurture"];
 export const canManage = (user) => ["Admin", "Owner", "Sales", "Operations"].includes(user?.role);
 export const canFinance = (user) => ["Admin", "Owner", "Finance"].includes(user?.role);
 const money = (value) => new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 2 }).format(value || 0);
-const when = (value) => value ? new Date(value).toLocaleString("en-IN") : "Not supplied";
+const when = timeInIndia;
 const field = (label, control) => <label className="field"><span>{label}</span>{control}</label>;
 function Heading({ title, description, action, label }) { return <div className="page-heading"><div><h1>{title}</h1><p>{description}</p></div>{action && <button className="primary-button" onClick={action}><Plus size={17} />{label}</button>}</div>; }
 function Tile({ label, value, onClick, hint = "Saved records" }) { return <button className="metric-card tone-mint actionable-metric" onClick={onClick}><div className="metric-top"><span>{label}</span><ChevronRight size={18} /></div><strong className="metric-value">{value}</strong><span className="metric-label">{hint}</span></button>; }
 function Empty({ children }) { return <p className="empty-records">{children}</p>; }
 
-function Editor({ title, children, onClose, onSave, readOnly = false }) {
+export function Editor({ title, children, onClose, onSave, readOnly = false }) {
   const dialog = useRef(null);
+  const submitting = useRef(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   useEffect(() => { const previouslyFocused = document.activeElement; dialog.current.showModal(); return () => previouslyFocused?.focus(); }, []);
   async function submit(event) {
-    event.preventDefault(); if (busy) return;
+    event.preventDefault(); if (submitting.current) return;
+    submitting.current = true;
     setBusy(true); setError("");
-    try { await onSave(); } catch (problem) { setError(problem.message); } finally { setBusy(false); }
+    try { await onSave(); } catch (problem) { setError(problem.message); } finally { submitting.current = false; setBusy(false); }
   }
   return <dialog className="record-dialog" ref={dialog} aria-labelledby="record-editor-title" onCancel={(event) => { event.preventDefault(); if (!busy) onClose(); }}>
     <form onSubmit={submit}><header className="modal-head"><h2 id="record-editor-title">{title}</h2><button type="button" className="icon-button" disabled={busy} onClick={onClose} aria-label="Close editor"><X size={20} /></button></header>
@@ -29,7 +32,7 @@ function Editor({ title, children, onClose, onSave, readOnly = false }) {
 }
 
 export function LeadFacts({ lead }) {
-  const rows = [["Name", lead.name], ["Phone", lead.phone], ["Email", lead.email], ["Lead status", lead.status], ["Source", lead.source], ["Campaign", lead.campaign_name], ["Campaign ID", lead.campaign_id], ["Ad set", lead.adset_name], ["Ad", lead.ad_name], ["Ad ID", lead.ad_id], ["Click platform", lead.source_platform || "Unknown — not supplied by Meta"], ["Advertised package", lead.offering_name], ["Event", lead.event_reference], ["First message", lead.first_message], ["Created", when(lead.created_at)], ["Last message", when(lead.last_message_at)], ["Lead ID", lead.id]];
+  const rows = [["Name", lead.name], ["Phone", lead.phone], ["Email", lead.email], ["Lead status", lead.status], ["Source", lead.source], ["Campaign", lead.campaign_name], ["Campaign ID", lead.campaign_id], ["Ad set", lead.adset_name], ["Ad", lead.ad_name], ["Ad ID", lead.ad_id], ["Click platform", lead.source_platform || "Unknown — not supplied by Meta"], ["Advertised package", lead.offering_name], ["Event", lead.event_reference], ["First message", lead.first_message], ["Review notes", lead.notes], ["Next action", lead.next], ["First message sent", when(lead.first_message_at)], ["Captured in CRM", when(lead.created_at)], ["Last message sent", when(lead.last_message_at)], ["Last updated", when(lead.updated_at)], ["Lead ID", lead.id]];
   return <dl className="record-facts">{rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value || "Not supplied"}</dd></div>)}</dl>;
 }
 
@@ -39,6 +42,7 @@ export function LeadEditor({ lead, api, user, onClose, onSaved }) {
   return <Editor title={`Review lead · ${lead.name}`} onClose={onClose} readOnly={!canManage(user)} onSave={async () => {
     await api(`/api/leads/${lead.uuid}`, { method: "PATCH", body: JSON.stringify({ ...form, travelers: form.travelers === "" ? null : Number(form.travelers), budget: form.budget === "" ? null : Number(form.budget), updated_at: lead.updated_at }) }); await onSaved(); onClose();
   }}>
+    <p className="record-help lead-edit-stamp">Last updated {when(lead.updated_at)}. Original message and capture timestamps are preserved.</p>
     <div className="form-two">{field("Lead status", <select value={form.status} onChange={update("status")}>{leadStatuses.map((status) => <option key={status}>{status}</option>)}</select>)}{field("Requested destination", <input maxLength={500} value={form.destination} onChange={update("destination")} />)}</div>
     <div className="form-two">{field("Travel start", <input type="date" value={form.start_date} onChange={update("start_date")} />)}{field("Travel end", <input type="date" min={form.start_date || undefined} value={form.end_date} onChange={update("end_date")} />)}</div>
     <div className="form-two">{field("Travelers", <input type="number" min="1" max="10000" placeholder="Not supplied" value={form.travelers} onChange={update("travelers")} />)}{field("Budget (INR)", <input type="number" min="0" max="1000000000" step="0.01" placeholder="Not supplied" value={form.budget} onChange={update("budget")} />)}</div>
@@ -48,15 +52,6 @@ export function LeadEditor({ lead, api, user, onClose, onSaved }) {
     <p className="record-help">Name, email and phone can be updated in Contacts. Original message and ad attribution stay unchanged. A new message after Won or Lost starts a new enquiry.</p>
     <details className="record-source"><summary>Original enquiry & attribution</summary><LeadFacts lead={lead} /></details>
   </Editor>;
-}
-
-export function DashboardLive({ data, currentUser, onNavigate, onEdit, onQuickAdd }) {
-  const leads = data?.leads || []; const trips = data?.trips || []; const stats = data?.stats;
-  return <><Heading title={`Welcome, ${currentUser.name.split(" ")[0]}`} description="Review incoming enquiries and your agency’s saved records." action={canManage(currentUser) ? onQuickAdd : null} label="Add lead" />
-    <section className="metric-grid"><Tile label="Open enquiries" value={stats?.open_enquiries ?? "—"} onClick={() => onNavigate("Leads")} hint="Review and update leads" /><Tile label="Active trips" value={stats?.active_trips ?? "—"} onClick={() => onNavigate("Trips")} /><Tile label="Customer due" value={stats ? money(stats.customer_due) : "—"} onClick={() => onNavigate("Money")} hint="Unpaid manual payment entries" /><Tile label="Trips at risk" value={stats?.margin_at_risk ?? "—"} onClick={() => onNavigate("Trips")} hint="Saved trip health" /></section>
-    <div className="insight-banner"><div><strong>WhatsApp lead capture</strong><span>New enquiries appear after the customer sends a message. The workspace refreshes every 15 seconds.</span></div><button onClick={() => onNavigate("Settings")}>Connection details <ChevronRight size={16} /></button></div>
-    <div className="dashboard-grid"><section className="card"><header className="card-header"><div><h2>Recent enquiries</h2><p>Open a lead to review its status and next action</p></div><button className="card-action" onClick={() => onNavigate("Leads")}>All leads <ChevronRight size={16} /></button></header>{leads.length ? leads.map((lead) => <button key={lead.uuid} className="record-list-row" onClick={() => onEdit(lead)}><span><strong>{lead.name}</strong><small>{lead.phone || "Phone not supplied"} · {lead.campaign_name || lead.source}</small><small>{lead.next}</small></span><span className={`stage-pill stage-${lead.status.toLowerCase()}`}>{lead.status}</span><ChevronRight size={16} /></button>) : <Empty>No enquiries yet.</Empty>}</section>
-      <section className="card"><header className="card-header"><div><h2>Trip records</h2><p>Saved trips only — no example bookings</p></div><button className="card-action" onClick={() => onNavigate("Trips")}>All trips <ChevronRight size={16} /></button></header>{trips.length ? trips.slice(0, 5).map((trip) => <button className="record-list-row" key={trip.uuid} onClick={() => onNavigate("Trips")}><span><strong>{trip.destination}</strong><small>{trip.guest} · {trip.dates}</small></span><span>{trip.stage}</span><ChevronRight size={16} /></button>) : <Empty>No trips recorded.</Empty>}<p className="record-help inset">Financial totals are manually maintained in Money. No bank feed or automated revenue calculation is connected.</p></section></div></>;
 }
 
 function ContactEditor({ contact, api, user, onClose, onSaved }) {
@@ -70,15 +65,24 @@ function ContactEditor({ contact, api, user, onClose, onSaved }) {
 export function ContactsManager({ contacts, api, user, onSaved, onEditLead }) {
   const [query, setQuery] = useState(""); const [selected, setSelected] = useState(null); const [detail, setDetail] = useState(null); const [editing, setEditing] = useState(null); const [error, setError] = useState(""); const [busy, setBusy] = useState(false);
   const detailGeneration = useRef(0);
+  const loadedContactPages = useRef(1); const priorSelected = useRef(null);
   useEffect(() => {
     detailGeneration.current++;
     if (!selected) { setDetail(null); return; }
-    let live = true; setError(""); setDetail(null);
-    api(`/api/contacts/${selected}`).then((result) => { if (live) setDetail(result); }).catch((e) => { if (live) setError(e.message); });
+    let live = true; setError("");
+    if (priorSelected.current !== selected) { loadedContactPages.current = 1; setDetail(null); priorSelected.current = selected; }
+    (async () => {
+      let result = await api(`/api/contacts/${selected}`);
+      for (let page = 1; live && page < loadedContactPages.current && result.next_offset !== null; page++) {
+        const next = await api(`/api/contacts/${selected}?offset=${result.next_offset}`);
+        result = { ...next, leads: [...result.leads, ...next.leads] };
+      }
+      if (live) setDetail(result);
+    })().catch((e) => { if (live) setError(e.message); });
     return () => { live = false; };
   }, [selected, contacts]);
   const visible = contacts.filter((c) => [c.name, c.phone, c.email, c.notes].join(" ").toLowerCase().includes(query.toLowerCase()));
-  async function more() { const generation = detailGeneration.current; setBusy(true); try { const result = await api(`/api/contacts/${selected}?offset=${detail.next_offset}`); if (generation === detailGeneration.current) setDetail((old) => old?.item.id === result.item.id ? ({ ...result, leads: [...old.leads, ...result.leads] }) : old); } catch (e) { if (generation === detailGeneration.current) setError(e.message); } finally { setBusy(false); } }
+  async function more() { const generation = detailGeneration.current; setBusy(true); try { const result = await api(`/api/contacts/${selected}?offset=${detail.next_offset}`); if (generation === detailGeneration.current) { loadedContactPages.current++; setDetail((old) => old?.item.id === result.item.id ? ({ ...result, leads: [...old.leads, ...result.leads] }) : old); } } catch (e) { if (generation === detailGeneration.current) setError(e.message); } finally { setBusy(false); } }
   return <><Heading title="Contacts" description="Contact details, linked enquiries and their original ad attribution." action={canManage(user) ? () => setEditing({}) : null} label="Add contact" /><label className="module-search"><span>Search contacts</span><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Name, phone, email or notes" /></label>
     <div className="contact-workspace"><section className="card contact-directory" aria-label="Contact directory">{visible.map((contact) => <button key={contact.id} className={`record-list-row ${selected === contact.id ? "selected-record" : ""}`} onClick={() => setSelected(contact.id)}><span><strong>{contact.name}</strong><small>{contact.phone || "Phone not supplied"}</small><small>{contact.email || contact.type}</small></span><ChevronRight size={17} /></button>)}{!visible.length && <Empty>No matching contacts.</Empty>}</section>
       <section className="card contact-detail" aria-label="Contact details">{error && <p role="alert" className="integration-notice">{error}</p>}{!detail ? <Empty>{selected ? "Loading contact…" : "Select a contact to review and manage their enquiries."}</Empty> : <><header className="card-header"><div><h2>{detail.item.name}</h2><p>{detail.item.type}</p></div>{canManage(user) && <button className="secondary-button" onClick={() => setEditing(detail.item)}>Edit contact</button>}</header><dl className="record-facts inset">{[["Phone", detail.item.phone], ["Email", detail.item.email], ["Contact notes", detail.item.notes], ["Added", when(detail.item.created_at)]].map(([name, value]) => <div key={name}><dt>{name}</dt><dd>{value || "Not supplied"}</dd></div>)}</dl><h3 className="inset">Linked enquiries</h3>{detail.leads.map((lead) => <article className="contact-enquiry" key={lead.uuid}><header><strong>{lead.destination} · {lead.status}</strong><button className="secondary-button" onClick={() => onEditLead(lead)}>{canManage(user) ? "Review / edit lead" : "View lead"}</button></header><p>{lead.dates} · {lead.travelers} · Budget: {lead.budget == null ? "Not supplied" : money(lead.budget)}</p><p>Next: {lead.next} · Owner: {lead.owner}</p>{lead.notes && <p className="preserve-text">{lead.notes}</p>}{lead.lost_reason && <p>Lost reason: {lead.lost_reason}</p>}<LeadFacts lead={lead} /></article>)}{!detail.leads.length && <Empty>No linked enquiries yet.</Empty>}{detail.next_offset !== null && <button className="secondary-button" disabled={busy} onClick={more}>Load older enquiries</button>}</>}</section></div>
@@ -105,8 +109,8 @@ function TripAmountsEditor({ trip, api, onSaved, onClose }) {
   return <Editor title={`Trip amounts · ${trip.id}`} onClose={onClose} onSave={async () => { await api(`/api/trips/${trip.uuid}`, { method: "PATCH", body: JSON.stringify({ total_amount: Number(total), customer_due: Number(due), updated_at: trip.updated_at }) }); await onSaved(); onClose(); }}><div className="form-two">{field("Package value (INR)", <input required min="0" max="1000000000" step="0.01" type="number" value={total} onChange={(e) => setTotal(e.target.value)} />)}{field("Trip balance due (INR)", <input required min="0" max={total} step="0.01" type="number" value={due} onChange={(e) => setDue(e.target.value)} />)}</div><p className="record-help">These are manually maintained trip amounts, separate from the payment ledger. Update them when the agreed package or balance changes.</p></Editor>;
 }
 
-export function MoneyManager({ payments = [], trips = [], user, api, onSaved }) {
-  const [editing, setEditing] = useState(null); const [tripEdit, setTripEdit] = useState(null); const [filter, setFilter] = useState("All");
+export function MoneyManager({ payments = [], trips = [], user, api, onSaved, initialFilter = "All" }) {
+  const [editing, setEditing] = useState(null); const [tripEdit, setTripEdit] = useState(null); const [filter, setFilter] = useState(initialFilter);
   const paidIn = payments.filter((p) => p.direction === "in" && p.status === "Paid").reduce((sum, p) => sum + p.amount, 0);
   const paidOut = payments.filter((p) => p.direction === "out" && p.status === "Paid").reduce((sum, p) => sum + p.amount, 0);
   const due = (direction) => payments.filter((p) => p.direction === direction && !["Paid", "Cancelled"].includes(p.status)).reduce((sum, p) => sum + p.amount, 0);
