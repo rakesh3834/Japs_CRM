@@ -30,6 +30,16 @@ do $$ declare msg jsonb; result jsonb; original uuid; other uuid; begin
   end;
   assert (select count(*)=2 from public.contacts);
   assert (select count(*)=6 from public.whatsapp_messages), 'Conflict partially persisted';
+  -- Existing pre-migration customers have contact links but no alias rows.
+  msg := '{"phone_number_id":"987654","waba_id":"123456","message_id":"legacy-phone-1","sender_id":"919999000003","phone":"+919999000003","profile_name":"Legacy guest","message_type":"text","message_text":"Existing enquiry"}';
+  result := public.crm_ingest_whatsapp_message_v1(msg); original := (result->>'lead_id')::uuid;
+  assert not exists(select 1 from public.whatsapp_sender_aliases where sender_id='919999000003');
+  result := public.crm_ingest_whatsapp_message(msg || '{"message_id":"legacy-phone-2","user_id":"IN.LEGACY789"}');
+  assert (result->>'lead_id')::uuid = original, 'Legacy phone link split when associating BSUID';
+  result := public.crm_ingest_whatsapp_message(msg || '{"message_id":"legacy-phone-3","sender_id":"bsuid:IN.LEGACY789","user_id":"IN.LEGACY789","phone":null}');
+  assert (result->>'lead_id')::uuid = original, 'Legacy customer split when phone became hidden';
+  assert (select count(*)=3 from public.contacts);
+  assert (select count(*)=9 from public.whatsapp_messages);
 end $$;
 rollback;
 \echo Sender identity assertions passed
