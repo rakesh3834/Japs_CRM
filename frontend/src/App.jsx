@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { LoginScreen, IntegrationSettings } from "./VerifiedAccess.jsx";
-import { DashboardLive, LeadEditor, ContactsManager, MoneyManager, ReportsLive, leadStatuses, canManage } from "./Management.jsx";
+import { Editor, LeadEditor, ContactsManager, MoneyManager, ReportsLive, leadStatuses, canManage } from "./Management.jsx";
+import { Overview } from "./Overview.jsx";
+import { Operations } from "./Operations.jsx";
+import { LeadsWorkspace } from "./LeadsWorkspace.jsx";
+import { createRefreshQueue } from "./refresh-queue.js";
 import {
   ArrowDownRight,
   ArrowUpRight,
@@ -89,17 +93,21 @@ function App() {
   const [nextOffset, setNextOffset] = useState(null);
   const leadPages = useRef(1);
   const workspaceLoading = useRef(false);
+  const dashboardRefresh = useRef(createRefreshQueue());
+  const moduleSequence = useRef(0);
+  const [viewFilter, setViewFilter] = useState({});
   const [dataStatus, setDataStatus] = useState("Waiting for sign-in");
   const effectiveDataStatus = dataStatus;
 
   const loadDashboard = async () => {
-    if (workspaceLoading.current) return;
-    workspaceLoading.current = true;
     const session = generation.current;
+    return dashboardRefresh.current(async () => {
+    if (session !== generation.current) return false;
+    workspaceLoading.current = true;
     try {
       const [result, leads] = await Promise.all([apiRequest("/api/dashboard"), apiRequest("/api/leads")]);
       let items = leads.items; let offset = leads.next_offset;
-      for (let page = 1; page < leadPages.current && offset !== null; page++) {
+      for (let page = 1; offset !== null && page < 1000; page++) {
         if (session !== generation.current) return;
         const more = await apiRequest(`/api/leads?offset=${offset}`);
         items = [...items, ...more.items]; offset = more.next_offset;
@@ -107,19 +115,22 @@ function App() {
       if (session !== generation.current) return;
       setDashboardData(result);
       setLeadsData([...new Map(items.map((lead) => [lead.uuid, lead])).values()]); setNextOffset(offset);
-      setDataStatus(`Supabase connected · checked ${new Date().toLocaleTimeString()} · refreshes every 15s`);
+      setDataStatus(`Supabase connected · checked ${new Date().toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata" })} IST · refreshes every 15s`);
+      return true;
     } catch (error) {
       if (session === generation.current) setDataStatus(error.message);
+      return false;
     } finally { workspaceLoading.current = false; }
+    });
   };
 
   const loadWorkspaceModules = async () => {
-    const session = generation.current;
+    const session = generation.current; const sequence = ++moduleSequence.current;
     try {
       const [contacts, suppliers] = await Promise.all([apiRequest("/api/contacts"), apiRequest("/api/suppliers")]);
-      if (session !== generation.current) return;
-      setContactsData(contacts.items || []); setSuppliersData(suppliers.items || []);
-    } catch (error) { if (session === generation.current) setDataStatus(error.message); }
+      if (session !== generation.current || sequence !== moduleSequence.current) return;
+      setContactsData(contacts.items || []); setSuppliersData(suppliers.items || []); return true;
+    } catch (error) { if (session === generation.current && sequence === moduleSequence.current) setDataStatus(error.message); return false; }
   };
 
   const [selectedTrip, setSelectedTrip] = useState(null);
@@ -159,7 +170,7 @@ function App() {
     void loadDashboard(); void loadWorkspaceModules();
     const check = () => { if (!document.hidden) void apiRequest("/api/me").catch(() => {}); };
     const interval = window.setInterval(check, 60000);
-    const refresh = () => { if (!document.hidden) { void loadDashboard(); void loadWorkspaceModules(); } };
+    const refresh = () => { if (!document.hidden && !workspaceLoading.current) { void loadDashboard(); void loadWorkspaceModules(); } };
     const refreshInterval = window.setInterval(refresh, 15000);
     document.addEventListener("visibilitychange", check);
     document.addEventListener("visibilitychange", refresh);
@@ -192,13 +203,14 @@ function App() {
     return leadSource.filter((lead) => `${lead.name} ${lead.phone} ${lead.destination} ${lead.source} ${lead.id} ${lead.campaign_name || ""} ${lead.first_message || ""}`.toLowerCase().includes(query));
   }, [leadsData, search]);
 
-  const navigate = (label) => {
+  const navigate = (label, filter = {}) => {
+    setViewFilter(filter);
     setActive(label);
     setSidebarOpen(false);
     setSelectedTrip(null);
     setSearch("");
   };
-  const refreshRecords = async () => { await Promise.all([loadDashboard(), loadWorkspaceModules()]); setToast("Changes saved to Supabase."); };
+  const refreshRecords = async () => { const results = await Promise.all([loadDashboard(), loadWorkspaceModules()]); setToast(results.every(Boolean) ? "Changes saved. Latest details are now shown." : "Saved, but some views could not refresh. Reload to see the latest details."); };
 
   if (!currentUser) return <LoginScreen api={apiRequest} mode={authMode} checking={checkingAuth} initialError={authError} onSignedIn={(user) => { sessionEpoch++; generation.current++; setCurrentUser(user); setAuthError(""); }} />;
 
@@ -242,7 +254,7 @@ function App() {
           <button className="icon-button mobile-menu" aria-label="Open navigation" onClick={() => setSidebarOpen(true)}><Menu size={21} /></button>
           <div className="breadcrumbs"><span className="crumb-muted">Workspace</span><ChevronRight size={14} /><strong>{active}</strong></div>
           <div className="topbar-actions">
-            <label className="global-search"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search trips, people, or IDs" /><kbd>⌘ K</kbd></label>
+            <label className="global-search"><Search size={17} /><input value={search} aria-label="Search leads" onChange={(event) => { setSearch(event.target.value); setActive("Leads"); setViewFilter({}); }} placeholder="Search leads, phones or campaigns" /></label>
             <button className="icon-button notification-button" aria-label="Notifications" onClick={() => navigate("Leads")}><Bell size={18} /><span className="notification-dot" /></button>
             <div className="profile-wrap">
               <button className="profile-chip" onClick={() => setShowProfile((value) => !value)}><span className="profile-avatar">{currentUser.name.split(" ").map((part) => part[0]).join("").slice(0, 2).toUpperCase()}</span><span className="profile-text"><strong>{currentUser.name}</strong><small>{currentUser.role}</small></span><ChevronDown size={14} /></button>
@@ -252,11 +264,11 @@ function App() {
         </header>
 
         <div className="page-content">
-          {active === "Command center" && <DashboardLive data={dashboardData} currentUser={currentUser} onQuickAdd={() => setShowQuickAdd(true)} onEdit={setEditingLead} onNavigate={navigate} />}
-          {active === "Leads" && <LeadsView leads={filteredLeads} onQuickAdd={canManage(currentUser) ? () => setShowQuickAdd(true) : null} onEdit={setEditingLead} onRefresh={loadDashboard} onMore={nextOffset !== null ? loadMoreLeads : null} />}
-          {active === "Trips" && <TripsView trips={dashboardData?.trips || []} onTrip={setSelectedTrip} />}
-          {active === "Operations" && <TripsView trips={dashboardData?.trips || []} onTrip={setSelectedTrip} />}
-          {active === "Money" && <MoneyManager payments={dashboardData?.payments || []} trips={dashboardData?.trips || []} api={apiRequest} user={currentUser} onSaved={refreshRecords} />}
+          {active === "Command center" && <Overview data={dashboardData} currentUser={currentUser} onQuickAdd={() => setShowQuickAdd(true)} onEdit={setEditingLead} onNavigate={navigate} />}
+          {active === "Leads" && <LeadsWorkspace key={JSON.stringify(viewFilter)} initialFilter={viewFilter} leads={filteredLeads} onQuickAdd={canManage(currentUser) ? () => setShowQuickAdd(true) : null} onEdit={setEditingLead} onRefresh={loadDashboard} onMore={nextOffset !== null ? loadMoreLeads : null} />}
+          {active === "Trips" && <TripsView key={JSON.stringify(viewFilter)} initialFilter={viewFilter.status} trips={dashboardData?.trips || []} onTrip={setSelectedTrip} />}
+          {active === "Operations" && <Operations key={JSON.stringify(viewFilter)} initialFilter={viewFilter.status} trips={dashboardData?.trips || []} leads={leadsData} api={apiRequest} user={currentUser} onSaved={refreshRecords} />}
+          {active === "Money" && <MoneyManager key={JSON.stringify(viewFilter)} initialFilter={viewFilter.status} payments={dashboardData?.payments || []} trips={dashboardData?.trips || []} api={apiRequest} user={currentUser} onSaved={refreshRecords} />}
           {active === "Contacts" && <ContactsManager contacts={contactsData} api={apiRequest} user={currentUser} onSaved={refreshRecords} onEditLead={setEditingLead} />}
           {active === "Suppliers" && <SuppliersView suppliers={suppliersData} onToast={setToast} />}
           {active === "Reports" && <ReportsLive data={dashboardData} onNavigate={navigate} />}
@@ -270,7 +282,7 @@ function App() {
         {navItems.slice(0, 5).map(({ label, icon: Icon }) => <button key={label} className={active === label ? "active" : ""} onClick={() => navigate(label)}><Icon size={19} /><span>{label === "Command center" ? "Home" : label}</span></button>)}
       </div>
 
-      {showQuickAdd && <QuickAddModal onClose={() => setShowQuickAdd(false)} onSave={async (form) => { try { await apiRequest("/api/leads", { method: "POST", body: JSON.stringify({ name: form.name, phone: form.phone, email: form.email || null, destination: form.destination, source: form.source, start_date: form.startDate || null, travelers: Number(form.travelers || 2), notes: form.notes }) }); await loadDashboard(); setToast("New lead saved to Supabase."); setShowQuickAdd(false); } catch (error) { setToast(`Not saved: ${error.message}`); } }} />}
+      {showQuickAdd && <QuickAddModal onClose={() => setShowQuickAdd(false)} onSave={async (form) => { await apiRequest("/api/leads", { method: "POST", body: JSON.stringify({ name: form.name, phone: form.phone, email: form.email || null, destination: form.destination, source: form.source, start_date: form.startDate || null, travelers: Number(form.travelers || 2), notes: form.notes }) }); await loadDashboard(); setToast("New lead saved to Supabase."); setShowQuickAdd(false); }} />}
       {selectedTrip && <TripDrawer trip={selectedTrip} onClose={() => setSelectedTrip(null)} onNavigate={navigate} />}
       {editingLead && <LeadEditor key={editingLead.uuid} lead={editingLead} api={apiRequest} user={currentUser} onClose={() => setEditingLead(null)} onSaved={refreshRecords} />}
       {toast && <div className="toast"><CircleCheck size={17} /> {toast}</div>}
@@ -282,21 +294,11 @@ function PageHeading({ eyebrow, title, description, action, actionLabel = "New l
   return <div className="page-heading"><div><div className="eyebrow">{eyebrow}</div><h1>{title}</h1><p>{description}</p></div>{action && <button className="primary-button" onClick={action}><Plus size={17} /> {actionLabel}</button>}</div>;
 }
 
-function LeadsView({ leads, onQuickAdd, onEdit, onRefresh, onMore }) {
-  const [filter, setFilter] = useState("All leads");
-  const visible = filter === "All leads" ? leads : leads.filter((lead) => lead.status === filter);
-  return <>
-    <PageHeading eyebrow="Sales workspace" title="Leads" description="Turn every enquiry into a clear next step." action={onQuickAdd} actionLabel="Add lead" />
-    <div className="filter-row"><label>Lead status <select aria-label="Filter lead status" value={filter} onChange={(e) => setFilter(e.target.value)}>{["All leads", ...leadStatuses].map((item) => <option key={item}>{item}</option>)}</select></label><button className="secondary-button" onClick={onRefresh}>Refresh enquiries</button></div>
-    <section className="card leads-page-card"><div className="list-toolbar"><div><strong>{visible.length} loaded leads</strong><span> · newest first · search filters loaded records</span></div></div><div className="lead-table desktop-table"><div className="table-head"><span>Lead</span><span>Trip plan</span><span>Budget</span><span>Stage</span><span>Next action</span><span /></div>{visible.map((lead) => <LeadRow key={lead.id} lead={lead} onEdit={onEdit} />)}</div><div className="mobile-stack">{visible.map((lead) => <LeadCard key={lead.id} lead={lead} onEdit={onEdit} />)}</div>{visible.length === 0 && <p className="integration-notice">No matching enquiries loaded. Check Settings for WhatsApp connection readiness.</p>}{onMore && <button className="secondary-button" onClick={onMore}>Load older leads</button>}</section>
-  </>;
-}
-
-function TripsView({ trips: tripData, onTrip }) {
+function TripsView({ trips: tripData, onTrip, initialFilter = "All trips" }) {
   const trips = tripData || [];
-  const [filter, setFilter] = useState("All trips");
-  const visible = filter === "All trips" ? trips : trips.filter((trip) => trip.stage === filter);
-  return <><PageHeading eyebrow="Trip workspaces" title="Trips" description="See every customer journey, its health, and the next handoff." action={trips.length ? () => onTrip(trips[0]) : null} actionLabel="Open trip" /><div className="filter-row"><div className="segmented-control">{["All trips", "Plan", "Quote", "Confirm", "Operate"].map((item) => <button key={item} className={filter === item ? "selected" : ""} onClick={() => setFilter(item)}>{item}</button>)}</div></div><section className="trip-grid">{visible.map((trip) => <TripCard key={trip.id} trip={trip} onClick={() => onTrip(trip)} />)}</section></>;
+  const [filter, setFilter] = useState(initialFilter);
+  const visible = trips.filter((trip) => filter === "All trips" || filter === "Active trips" && trip.stage !== "Close" && trip.health !== "Closed" || filter === "At risk" && trip.health === "At risk" || trip.stage === filter);
+  return <><PageHeading eyebrow="Trip workspaces" title="Trips" description="See every customer journey, its health, and the next handoff." action={trips.length ? () => onTrip(trips[0]) : null} actionLabel="Open trip" /><div className="filter-row"><div className="segmented-control">{["All trips", "Active trips", "At risk", "Plan", "Quote", "Confirm", "Operate", "Close"].map((item) => <button key={item} className={filter === item ? "selected" : ""} onClick={() => setFilter(item)}>{item}</button>)}</div></div><section className="trip-grid">{visible.map((trip) => <TripCard key={trip.id} trip={trip} onClick={() => onTrip(trip)} />)}</section></>;
 }
 
 function SuppliersView({ suppliers: supplierData, onToast }) {
@@ -309,26 +311,6 @@ function LibraryView({ onToast }) {
   return <><PageHeading eyebrow="Files & templates" title="Library" description="Keep the documents your team sends most often close to the work." action={() => onToast("Upload will connect to Supabase Storage in the next release.")} actionLabel="Upload file" /><section className="module-grid library-grid">{files.map(({ icon: Icon, title, meta, kind }) => <button className="module-card library-card" key={title} onClick={() => onToast(`${title} opened.`)}><span className="library-icon"><Icon size={18} /></span><span className="module-card-copy"><strong>{title}</strong><small>{meta}</small></span><span className="library-kind">{kind}</span><ChevronRight size={16} /></button>)}</section><section className="card library-note"><Sparkles size={17} /><div><strong>Keep every handoff polished.</strong><span>Quote, voucher, receipt, and itinerary files will share the same trip timeline.</span></div></section></>;
 }
 
-
-function LeadRow({ lead, onEdit }) {
-  return <><div className="table-row actionable-row" role="button" tabIndex={0} aria-label={`Review lead ${lead.name}`} onClick={() => onEdit(lead)} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onEdit(lead); } }}><span className="lead-person"><span className={`initials ${lead.color || "mint"}`}>{lead.initials || lead.name.slice(0, 2).toUpperCase()}</span><span><strong>{lead.name}</strong><small>{lead.phone || "Phone not supplied"} · {lead.source}</small></span></span><span className="trip-plan"><strong>{lead.destination}</strong><small>{lead.dates} · {lead.travelers}</small></span><span className="lead-value">{lead.budget == null ? "Not supplied" : formatINR(lead.value)}</span><span><span className={`stage-pill stage-${lead.status.toLowerCase()}`}>{lead.status}</span></span><span className="next-action"><strong>{lead.next}</strong><small>{lead.owner}</small></span><ChevronRight size={17} /></div><LeadAttribution lead={lead} /></>;
-}
-
-function LeadCard({ lead, onEdit }) {
-  return <article className="lead-card"><button className="secondary-button lead-review-button" onClick={() => onEdit(lead)}>Review / edit lead</button><div className="lead-card-top"><span className={`initials ${lead.color || "mint"}`}>{lead.initials || lead.name.slice(0, 2).toUpperCase()}</span><div><strong>{lead.name}</strong><small>{lead.phone || "Phone not supplied"} · {lead.source}</small></div><span className={`stage-pill stage-${lead.status.toLowerCase()}`}>{lead.status}</span></div><div className="lead-card-details"><span><Compass size={14} /> {lead.destination}</span><span><CalendarDays size={14} /> {lead.dates}</span><strong>{lead.budget == null ? "Budget not supplied" : formatINR(lead.value)}</strong></div><LeadAttribution lead={lead} /><div className="lead-card-foot"><span>Next: {lead.next}</span><span>{lead.owner}</span></div></article>;
-}
-
-function LeadAttribution({ lead }) {
-  if (!lead.ad_id && !lead.first_message) return null;
-  return <details className="lead-attribution"><summary>{lead.campaign_name || (lead.ad_id ? "Campaign lookup pending" : "WhatsApp enquiry")} · {lead.source_platform || "Click platform unknown"}</summary>
-    <dl><dt>Customer’s first message</dt><dd>{lead.first_message || "Non-text message — check WhatsApp"}</dd>
-      <dt>Ad</dt><dd>{lead.ad_name || "Not yet available"}{lead.ad_id ? ` · ${lead.ad_id}` : ""}</dd>
-      <dt>Campaign / ad set</dt><dd>{lead.campaign_name || "Not yet available"} / {lead.adset_name || "Not yet available"}</dd>
-      <dt>Advertised package / event</dt><dd>{lead.offering_name || "Not mapped"} / {lead.event_reference || "Not mapped"}</dd>
-      <dt>Lead ID</dt><dd>{lead.id}</dd></dl>
-    <small>The WhatsApp display name is not a verified legal name or an Instagram username. Missing click platform is not inferred from ad placements.</small>
-  </details>;
-}
 
 function TripCard({ trip, onClick }) {
   return <button className="trip-card" onClick={onClick}><div className="trip-card-top"><span className="trip-code">{trip.id}</span><span className={`health-pill ${trip.healthTone}`}><i /> {trip.health}</span></div><div className="trip-destination"><strong>{trip.destination}</strong><span>{trip.guest}</span></div><div className="trip-dates"><CalendarDays size={14} /> {trip.dates} · {trip.days} days <span>·</span> {trip.travelers} travelers</div><div className="trip-progress-label"><span>{trip.stage}</span><strong>{trip.progress}% ready</strong></div><div className="progress-track"><span className={`progress-fill ${trip.healthTone === "warning" ? "orange" : "green"}`} style={{ width: `${trip.progress}%` }} /></div><div className="trip-card-foot"><span>{trip.services}</span><span>{formatINR(trip.amount)}</span><ChevronRight size={15} /></div></button>;
@@ -347,10 +329,15 @@ function MarginRow({ trip, amount, margin, reason, tone }) {
 }
 
 function QuickAddModal({ onClose, onSave }) {
-  const [step, setStep] = useState(1);
-  const [form, setForm] = useState({ name: "", phone: "", email: "", destination: "", startDate: "", travelers: "2", source: "Website form", notes: "" });
+  const [form, setForm] = useState({ name: "", phone: "", email: "", destination: "", startDate: "", travelers: "2", source: "Manual", notes: "" });
   const update = (key) => (event) => setForm((current) => ({ ...current, [key]: event.target.value }));
-  return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><section className="modal quick-add-modal" role="dialog" aria-modal="true" aria-labelledby="quick-add-title"><div className="modal-head"><div><div className="eyebrow">New opportunity</div><h2 id="quick-add-title">Add a lead</h2><p>Capture the trip brief now. You can enrich it later.</p></div><button className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></button></div><div className="stepper"><span className="step active"><b>1</b> Contact</span><i /><span className={`step ${step === 2 ? "active" : ""}`}><b>2</b> Trip brief</span></div>{step === 1 ? <div className="modal-form"><Field label="Customer name" required><input autoFocus value={form.name} onChange={update("name")} placeholder="e.g. Nisha Kapoor" /></Field><div className="form-two"><Field label="Phone number" required><input value={form.phone} onChange={update("phone")} placeholder="+91 98765 43210" /></Field><Field label="Email address"><input value={form.email} onChange={update("email")} placeholder="name@example.com" /></Field></div><div className="form-actions"><button className="secondary-button" onClick={onClose}>Cancel</button><button className="primary-button" disabled={!form.name || !form.phone} onClick={() => setStep(2)}>Continue <ChevronRight size={16} /></button></div></div> : <div className="modal-form"><div className="form-two"><Field label="Destination" required><input autoFocus value={form.destination} onChange={update("destination")} placeholder="e.g. Bali" /></Field><Field label="Source"><select value={form.source} onChange={update("source")}><option>Website form</option><option>WhatsApp</option><option>Email</option><option>Instagram</option><option>Meta lead</option><option>Referral</option></select></Field></div><div className="form-two"><Field label="Travel start"><input type="date" value={form.startDate} onChange={update("startDate")} /></Field><Field label="Travelers"><input type="number" min="1" value={form.travelers} onChange={update("travelers")} /></Field></div><Field label="First note"><textarea value={form.notes} onChange={update("notes")} placeholder="What did the customer ask for?" rows="3" /></Field><div className="form-callout"><Sparkles size={16} /><span>Japs_CRM will create the follow-up task automatically after saving.</span></div><div className="form-actions"><button className="secondary-button" onClick={() => setStep(1)}>Back</button><button className="primary-button" disabled={!form.destination} onClick={() => onSave(form)}><Check size={16} /> Save lead</button></div></div>}</section></div>;
+  return <Editor title="Add a lead" onClose={onClose} onSave={() => onSave(form)}>
+    <Field label="Customer name" required><input required maxLength={200} value={form.name} onChange={update("name")} /></Field>
+    <div className="form-two"><Field label="Phone number" required><input required type="tel" maxLength={40} value={form.phone} onChange={update("phone")} /></Field><Field label="Email address"><input type="email" maxLength={254} value={form.email} onChange={update("email")} /></Field></div>
+    <div className="form-two"><Field label="Destination" required><input required maxLength={500} value={form.destination} onChange={update("destination")} /></Field><Field label="Source"><select value={form.source} onChange={update("source")}>{["Manual", "Website form", "WhatsApp", "Email", "Instagram", "Meta lead", "Referral"].map((source) => <option key={source}>{source}</option>)}</select></Field></div>
+    <div className="form-two"><Field label="Travel start"><input type="date" value={form.startDate} onChange={update("startDate")} /></Field><Field label="Travelers"><input type="number" min="1" max="10000" value={form.travelers} onChange={update("travelers")} /></Field></div>
+    <Field label="First note"><textarea maxLength={6000} rows="3" value={form.notes} onChange={update("notes")} /></Field><p className="record-help">Save the lead, then add any team follow-up in Operations.</p>
+  </Editor>;
 }
 
 function Field({ label, required, children }) { return <label className="field"><span>{label}{required && <em> *</em>}</span>{children}</label>; }
