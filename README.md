@@ -37,7 +37,7 @@ Database tests use an isolated local PostgreSQL cluster, never Supabase. Set JAP
 
 ## Rollout gates
 
-For the existing database, do not rerun the initial schema or completed bootstrap. The verified-staff and profile/attribution migrations are already applied. Apply `supabase/migrations/20260920_whatsapp_sender_identity.sql` once **before deploying the repaired Worker**, after checking migration state. The 20 September audit found a messaging-permission gap and no new stored messages after early 17 September IST. Meta callback testing succeeded, but production permissions, the new migration/deployment and fresh normal/ad-message acceptance checks remain outstanding. See the setup guide for current evidence and account-access blockers.
+For the existing database, do not rerun the initial schema, completed bootstrap or migrations. The verified-staff, profile/attribution and `20260920_whatsapp_sender_identity.sql` migrations are applied. On 20 September, the approved messaging-permission repair and production release succeeded. Seven real post-deployment messages were saved across three enquiries, including fresh ad attribution to **Manali Sept 13**. Historical completeness since 17 September is not established; reconcile the original WhatsApp conversations separately. See the setup guide for verification evidence and remaining limitations.
 
 While email is paused, set `JAPS_CRM_AUTH_MODE=temporary_password`, `JAPS_CRM_TEMP_ADMIN_EMAIL` and a future `JAPS_CRM_TEMP_ADMIN_EXPIRES_AT`. Only that already-confirmed, approved Admin/Owner can sign in. Supabase stores the password; never place it in source or frontend configuration. Missing/expired configuration fails closed. Email endpoints are disabled in password mode.
 
