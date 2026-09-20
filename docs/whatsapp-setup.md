@@ -2,6 +2,15 @@
 
 ## Delivery audit — 20 September 2026
 
+### Repair progress — 20 September, 13:17 UTC
+
+- The owner completed Meta verification. The replacement server token now returns granted `ads_read`, `whatsapp_business_management`, and `whatsapp_business_messaging`. It is stored as the secret `META_WHATSAPP_ACCESS_TOKEN` in Sites environment revision 7, pending the repaired deployment. The working ads token was left unchanged. The exact existing WABA subscription was refreshed successfully; no number or ad settings were changed.
+- The reviewed `20260920_whatsapp_sender_identity.sql` migration was applied once in production. Postflight matched the tested wrapper/legacy function hashes and server-only grants, and confirmed alias row-level security. Record counts remained **6 contacts, 3 leads, 4 messages and 2 contact links** across the migration.
+- Two additional real messages reached production during the repair: an audio message received **13:08:05 UTC** and a text message received **13:11:43 UTC** on 20 September. Both were stored without an error and linked to leads; neither carried ad-referral data. This is evidence of resumed inbound delivery, not proof of all historical or future enquiries or of fresh ad attribution.
+- Reviewed application fixes pass 25 automated tests, isolated PostgreSQL migration/identity/concurrency tests, and the production build. Fresh **post-deployment normal-message and actual-ad acceptance tests** remain required. No historical completeness claim is justified.
+
+### Earlier audit findings (before the repair above)
+
 **Continuous live capture is not verified and must not be described as complete.** Production contained only two WhatsApp messages from one sender, both received early on 17 September IST, and no newer message at the time of this audit. Ads Insights showed conversations after those timestamps, but those aggregate metrics are not a list of identifiable missing leads.
 
 - A real Meta dashboard `messages` test reached the production callback with **HTTP 200 at 2026-09-20T12:06:05.466Z**. Its sample phone is intentionally unmapped, so no sample customer was created. This proves reachability and signature acceptance, not delivery of actual agency enquiries.
@@ -49,7 +58,7 @@ Ads alone do not reveal the sender’s phone/name at click time. WhatsApp provid
 
 1. Sign into the Supabase project owning Japs_CRM and confirm its backup/restore plan.
 2. **Completed:** apply `supabase/migrations/20260917_verified_staff_whatsapp.sql` and `supabase/migrations/20260917_whatsapp_profile_attribution.sql`. For the existing database, do not rerun the old initial schema. No customer records were deleted.
-   **Pending repair migration:** apply `supabase/migrations/20260920_whatsapp_sender_identity.sql` once, after checking it has not already been applied. It adds service-only sender aliases and wraps the existing ingestion function transactionally. Apply it before the updated Worker. Phone-only ingestion remains compatible; alias conflicts fail without merging independently established contacts.
+   **Completed repair migration (20 September):** `supabase/migrations/20260920_whatsapp_sender_identity.sql` was applied once and verified. Do not reapply it. It adds service-only sender aliases and wraps the existing ingestion function transactionally. Phone-only ingestion remains compatible; alias conflicts fail without merging independently established contacts.
 3. **Completed:** apply `supabase/bootstrap_verified_admin.sql`. The user explicitly approved `pahwajayant26@gmail.com` as first admin. Old self-created profiles do not inherit permission. Bootstrap stages the business number inactive; the verified exact mapping was subsequently enabled for this rollout.
 4. **Completed for this rollout:** use the owner's approved temporary password mode, the existing confirmed administrator and expiry **`2026-10-01T00:00:00Z`**. Email endpoints stay disabled. For a future explicitly approved email rollout, keep email confirmation required and set the **Magic Link** template to show a code, for example:
    `<h2>Japs_CRM sign-in</h2><p>Your code: <strong>{{ .Token }}</strong></p><p>If you did not request this, ignore this email.</p>`
@@ -71,7 +80,7 @@ Sources: [Supabase email OTP](https://supabase.com/docs/guides/auth/auth-email-p
 | Agency phone number | 1104024252793908 |
 | Ad account | 1014327913183517 |
 
-1. **Permission repair pending:** retain authorized management access and add the owner-approved `whatsapp_business_messaging` grant needed for incoming `messages` webhooks. It also bundles send/media capabilities; no outbound customer messaging is authorized by this rollout. Store the replacement as `META_WHATSAPP_ACCESS_TOKEN`, never in chat or frontend code. Independently verify its app, asset access and granted scopes.
+1. **Permission repair completed (20 September):** the owner-approved replacement has `whatsapp_business_messaging` plus the existing authorized management and ads-read grants. It also bundles send/media capabilities; no outbound customer messaging is authorized by this rollout. The replacement is stored as `META_WHATSAPP_ACCESS_TOKEN`, never in chat or frontend code. Account access and granted scopes were checked; the repaired deployment must apply the new environment revision.
 2. **Completed and rechecked on 17 September:** authorized GET of `is_on_biz_app,platform_type` returned `true` and `CLOUD_API`; the WABA's `/phone_numbers` edge verified the exact agency number. Staff sign-in and the persistent read credential are now configured, so CRM Settings can repeat the read-only check. An access failure would not prove coexistence is absent.
 3. **Not needed for the current, already confirmed connection.** If future onboarding is needed, resolve eligibility for Meta’s supported Embedded Signup coexistence route. Current documentation has provider prerequisites for implementing it. A generic Facebook Login configuration or the API Setup “From” dropdown does not complete this onboarding. Resolve eligibility before any irreversible Tech Provider declaration or provider purchase.
 4. If the route is available and approved, connect the **existing Business app account** through Meta’s official verification/QR flow. Keep returned WABA/phone IDs. Do not run the standard phone `/register` step for the coexistence number.
