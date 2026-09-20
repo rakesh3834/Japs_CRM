@@ -2,6 +2,7 @@ import { HttpError, json, limitedBody, database, rpc, organizationId, requireRol
 
 const textLimit = (value, max = 4096) => typeof value === "string" ? value.slice(0, max) : null;
 const metaId = (value) => /^\d{5,30}$/.test(String(value || "")) ? String(value) : null;
+const userId = (value) => typeof value === "string" && /^[A-Z]{2}\.[A-Za-z0-9]{1,128}$/.test(value) ? value : null;
 
 export async function validSignature(raw, signature, secret) {
   if (!secret || !/^sha256=[a-f0-9]{64}$/.test(signature || "")) return false;
@@ -10,26 +11,33 @@ export async function validSignature(raw, signature, secret) {
   return crypto.subtle.verify("HMAC", key, bytes, raw);
 }
 
-export function normalizeMessages(payload) {
+export function normalizeMessages(payload, diagnostics = {}) {
   if (payload?.object !== "whatsapp_business_account" || !Array.isArray(payload.entry)) return [];
   const results = [];
   for (const entry of payload.entry) for (const change of Array.isArray(entry?.changes) ? entry.changes : []) {
     // History, echoes, status changes and business auto-replies are not new enquiries.
     if (change?.field !== "messages") continue;
     const value = change.value || {};
+    diagnostics.value_errors = (diagnostics.value_errors || 0) + (Array.isArray(value.errors) ? value.errors.length : 0);
     for (const msg of Array.isArray(value.messages) ? value.messages : []) {
-      if (!msg || typeof msg.id !== "string" || !msg.id || !msg.from) continue;
-      if (String(msg.from) === String(value.metadata?.display_phone_number)) continue;
+      diagnostics.candidates = (diagnostics.candidates || 0) + 1;
+      const bsuid = userId(msg?.from_user_id);
+      const from = typeof msg?.from === "string" && /^\+?\d{7,15}$/.test(msg.from) ? msg.from.replace(/^\+/, "") : null;
+      if (!msg || typeof msg.id !== "string" || !msg.id || (!from && !bsuid)) {
+        diagnostics.missing_identity = (diagnostics.missing_identity || 0) + 1; continue;
+      }
+      const businessPhone = typeof value.metadata?.display_phone_number === "string" ? value.metadata.display_phone_number.replace(/^\+/, "") : null;
+      if (from && businessPhone && from === businessPhone) { diagnostics.ignored = (diagnostics.ignored || 0) + 1; continue; }
       const contacts = Array.isArray(value.contacts) ? value.contacts : [];
-      const contact = contacts.find((item) => String(item?.wa_id) === String(msg.from));
+      const contact = contacts.find((item) => (from && String(item?.wa_id) === from) || (bsuid && item?.user_id === bsuid));
       const unsupported = Array.isArray(msg.errors) && msg.errors.length > 0;
       const content = msg.text?.body ?? msg.button?.text ?? msg.interactive?.button_reply?.title ?? msg.interactive?.list_reply?.title ?? msg.image?.caption ?? msg.video?.caption ?? msg.document?.caption ?? null;
       const referral = msg.referral && typeof msg.referral === "object" ? msg.referral : {};
       results.push({
         waba_id: textLimit(String(entry.id || ""), 64), phone_number_id: textLimit(value.metadata?.phone_number_id, 64),
-        message_id: textLimit(msg.id, 512), sender_id: textLimit(String(msg.from), 256),
-        phone: /^\+?\d{7,15}$/.test(String(msg.from)) ? `+${String(msg.from).replace(/^\+/, "")}` : null,
-        profile_name: textLimit(contact?.profile?.name, 160), message_type: textLimit(msg.type, 64),
+        message_id: textLimit(msg.id, 512), sender_id: from || `bsuid:${bsuid}`, user_id: bsuid,
+        phone: from ? `+${from}` : null,
+        profile_name: textLimit(textLimit(contact?.profile?.name, 160)?.trim() || contact?.profile?.username, 160), message_type: textLimit(msg.type, 64),
         message_text: textLimit(content), timestamp: /^\d+$/.test(String(msg.timestamp)) ? Number(msg.timestamp) : null,
         referral, ad_id: referral.source_type === "ad" ? metaId(referral.source_id) : null,
         error_code: unsupported ? textLimit(String(msg.errors[0].code || "unknown"), 64) : null,
@@ -41,6 +49,14 @@ export function normalizeMessages(payload) {
 }
 
 export async function receiveWebhook(request, env, ctx) {
+  const started = Date.now();
+  const diagnostics = { request_id: crypto.randomUUID(), candidates: 0, stored: 0, duplicates: 0, error_records: 0, ignored: 0, unmapped: 0, missing_identity: 0, value_errors: 0 };
+  const report = (status) => {
+    // Never include payloads, sender IDs, headers, tokens or customer text.
+    const warning = status >= 400 || diagnostics.unmapped || diagnostics.missing_identity || diagnostics.value_errors || diagnostics.error_records;
+    console[warning ? "warn" : "info"](JSON.stringify({ event: "whatsapp_delivery", ...diagnostics, status, duration_ms: Date.now() - started }));
+  };
+  try {
   const url = new URL(request.url);
   if (request.method === "GET") {
     if (!env.META_WEBHOOK_VERIFY_TOKEN) throw new HttpError(503, "Webhook verification is not configured.");
@@ -51,25 +67,36 @@ export async function receiveWebhook(request, env, ctx) {
   }
   if (request.method !== "POST") throw new HttpError(405, "Method not allowed.");
   if (!env.META_APP_SECRET) throw new HttpError(503, "Webhook signing secret is not configured.");
-  const raw = await limitedBody(request, 1024 * 1024);
+  const raw = await limitedBody(request, 3 * 1024 * 1024);
   if (!await validSignature(raw, request.headers.get("X-Hub-Signature-256"), env.META_APP_SECRET)) throw new HttpError(401, "Signature rejected.");
   let payload;
   try { payload = JSON.parse(new TextDecoder().decode(raw)); } catch { throw new HttpError(400, "Invalid JSON."); }
   if (payload?.object !== "whatsapp_business_account" || !Array.isArray(payload.entry)) throw new HttpError(400, "Unexpected webhook object.");
-  const messages = normalizeMessages(payload);
+  const messages = normalizeMessages(payload, diagnostics);
   const ads = new Set(); let stored = 0;
   for (const message of messages) {
-    if (message.ignored) continue;
+    if (message.ignored) { diagnostics.ignored++; continue; }
     // The RPC resolves organization from an explicitly enabled phone + WABA mapping.
     // A wrong or unconfigured account cannot write into the default organization.
     const result = await rpc(env, "crm_ingest_whatsapp_message", { p_message: message });
-    if (result?.accepted) { stored++; if (message.ad_id) ads.add(`${result.organization_id}:${message.ad_id}`); }
+    if (result?.accepted) {
+      stored++;
+      if (result.duplicate) diagnostics.duplicates++;
+      else if (message.error_code) diagnostics.error_records++;
+      else diagnostics.stored++;
+      if (message.ad_id && !message.error_code) ads.add(`${result.organization_id}:${message.ad_id}`);
+    } else diagnostics.unmapped++;
   }
   // The enquiry is durable before we acknowledge; ads enrichment is recoverable.
   if (ads.size && ctx?.waitUntil) ctx.waitUntil(Promise.all([...ads].map(async (key) => {
     const [org, ad] = key.split(":"); await enrichAd(env, org, ad);
-  })).catch(() => {}));
+  })).catch(() => console.warn(JSON.stringify({ event: "whatsapp_attribution_failed", request_id: diagnostics.request_id }))));
+  report(200);
   return json({ ok: true, received: stored });
+  } catch (error) {
+    report(error instanceof HttpError ? error.status : 500);
+    throw error;
+  }
 }
 
 export async function graphGet(env, path, fields, token) {
@@ -103,13 +130,16 @@ export async function enrichAd(env, org, adId) {
 export async function integrationStatus(env, user) {
   requireRole(user, ["Owner", "Admin"]);
   const org = organizationId(env);
-  const [connections, pending, recent] = await Promise.all([
+  const [connections, pending, recent, latest, errors] = await Promise.all([
     database(env, "whatsapp_connections", { organization_id: `eq.${org}`, select: "phone_number_id,waba_id,display_phone_number,active,last_message_at" }),
     database(env, "meta_ad_attribution", { organization_id: `eq.${org}`, enrichment_status: "neq.ready", select: "ad_id,enrichment_status,last_error", limit: "20" }),
     database(env, "whatsapp_messages", { organization_id: `eq.${org}`, select: "received_at,error_code,message_type", order: "received_at.desc", limit: "5" }),
+    database(env, "whatsapp_messages", { organization_id: `eq.${org}`, lead_id: "not.is.null", error_code: "is.null", select: "received_at", order: "received_at.desc", limit: "1" }),
+    database(env, "whatsapp_messages", { organization_id: `eq.${org}`, error_code: "not.is.null", select: "received_at,error_code", order: "received_at.desc", limit: "5" }),
   ]);
+  const lastStoredAt = latest[0]?.received_at || null;
   return json({ ok: true, configured: { signing: Boolean(env.META_APP_SECRET), verification: Boolean(env.META_WEBHOOK_VERIFY_TOKEN), ads_read: Boolean(env.META_ADS_ACCESS_TOKEN), whatsapp_read: Boolean(env.META_WHATSAPP_ACCESS_TOKEN) }, connections, pending, recent,
-    callback_path: "/api/webhooks/whatsapp", live_test_verified: false });
+    callback_path: "/api/webhooks/whatsapp", delivery: { checked_at: new Date().toISOString(), last_stored_at: lastStoredAt, recent_delivery_observed: Boolean(lastStoredAt && Date.now() - Date.parse(lastStoredAt) < 86400000), completeness_verified: false }, errors });
 }
 
 export async function integrationAction(request, env, user, action) {
@@ -124,8 +154,11 @@ export async function integrationAction(request, env, user, action) {
     const connections = await database(env, "whatsapp_connections", { organization_id: `eq.${organizationId(env)}`, select: "phone_number_id,waba_id", limit: "1" });
     const phone = connections?.[0]?.phone_number_id;
     if (!metaId(phone)) throw new HttpError(503, "Business number mapping not configured.");
-    const status = await graphGet(env, phone, "is_on_biz_app,platform_type", env.META_WHATSAPP_ACCESS_TOKEN);
-    return json({ ok: true, coexistence_confirmed: status.is_on_biz_app === true && status.platform_type === "CLOUD_API", is_on_biz_app: status.is_on_biz_app ?? null, platform_type: status.platform_type ?? null });
+    const [status, permissions] = await Promise.all([
+      graphGet(env, phone, "status,is_on_biz_app,platform_type,webhook_configuration", env.META_WHATSAPP_ACCESS_TOKEN),
+      graphGet(env, "me/permissions", "permission,status", env.META_WHATSAPP_ACCESS_TOKEN),
+    ]);
+    return json({ ok: true, coexistence_confirmed: status.is_on_biz_app === true && status.platform_type === "CLOUD_API", phone_connected: status.status === "CONNECTED", messaging_permission_granted: permissions.data?.some((item) => item.permission === "whatsapp_business_messaging" && item.status === "granted") === true, is_on_biz_app: status.is_on_biz_app ?? null, platform_type: status.platform_type ?? null });
   }
   if (action === "map-ad") {
     const body = await bodyJson(request);

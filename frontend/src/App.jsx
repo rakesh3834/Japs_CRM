@@ -128,20 +128,30 @@ function App() {
   const [suppliersData, setSuppliersData] = useState([]);
   const [leadsData, setLeadsData] = useState([]);
   const [nextOffset, setNextOffset] = useState(null);
+  const leadPages = useRef(1);
+  const workspaceLoading = useRef(false);
   const [dataStatus, setDataStatus] = useState("Waiting for sign-in");
   const effectiveDataStatus = dataStatus;
 
   const loadDashboard = async () => {
+    if (workspaceLoading.current) return;
+    workspaceLoading.current = true;
     const session = generation.current;
     try {
       const [result, leads] = await Promise.all([apiRequest("/api/dashboard"), apiRequest("/api/leads")]);
+      let items = leads.items; let offset = leads.next_offset;
+      for (let page = 1; page < leadPages.current && offset !== null; page++) {
+        if (session !== generation.current) return;
+        const more = await apiRequest(`/api/leads?offset=${offset}`);
+        items = [...items, ...more.items]; offset = more.next_offset;
+      }
       if (session !== generation.current) return;
       setDashboardData(result);
-      setLeadsData(leads.items); setNextOffset(leads.next_offset);
-      setDataStatus("Supabase connected");
+      setLeadsData([...new Map(items.map((lead) => [lead.uuid, lead])).values()]); setNextOffset(offset);
+      setDataStatus(`Supabase connected · checked ${new Date().toLocaleTimeString()} · refreshes every 15s`);
     } catch (error) {
       if (session === generation.current) setDataStatus(error.message);
-    }
+    } finally { workspaceLoading.current = false; }
   };
 
   const loadWorkspaceModules = async () => {
@@ -157,6 +167,7 @@ function App() {
   const [toast, setToast] = useState("");
   function clearSession() {
     sessionEpoch++; generation.current++; setCurrentUser(null); setDashboardData(null); setLeadsData([]);
+    leadPages.current = 1;
     setContactsData([]); setSuppliersData([]); setNextOffset(null); setSelectedTrip(null);
     setShowQuickAdd(false); setShowProfile(false); setSearch(""); setToast(""); setActive("Command center");
     setDataStatus("Please sign in");
@@ -187,17 +198,24 @@ function App() {
     void loadDashboard(); void loadWorkspaceModules();
     const check = () => { if (!document.hidden) void apiRequest("/api/me").catch(() => {}); };
     const interval = window.setInterval(check, 60000);
+    const refresh = () => { if (!document.hidden) void loadDashboard(); };
+    const refreshInterval = window.setInterval(refresh, 15000);
     document.addEventListener("visibilitychange", check);
-    return () => { window.clearInterval(interval); document.removeEventListener("visibilitychange", check); };
+    document.addEventListener("visibilitychange", refresh);
+    return () => { window.clearInterval(interval); window.clearInterval(refreshInterval); document.removeEventListener("visibilitychange", check); document.removeEventListener("visibilitychange", refresh); };
   }, [currentUser]);
   async function loadMoreLeads() {
+    if (workspaceLoading.current || nextOffset === null) return;
+    workspaceLoading.current = true;
     const session = generation.current;
     try {
       const result = await apiRequest(`/api/leads?offset=${nextOffset}`);
       if (session !== generation.current) return;
       setLeadsData((current) => [...new Map([...current, ...result.items].map((lead) => [lead.uuid, lead])).values()]);
       setNextOffset(result.next_offset);
-    } catch (error) { setToast(error.message); }
+      leadPages.current++;
+    } catch (error) { if (session === generation.current) setToast(error.message); }
+    finally { workspaceLoading.current = false; }
   }
 
   useEffect(() => {

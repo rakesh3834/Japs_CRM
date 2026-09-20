@@ -6,8 +6,10 @@ Travel-agency CRM with a React interface, Cloudflare-compatible Worker API and a
 
 - Temporary administrator password sign-in backed by Supabase; email-code setup is paused. Server-side role and organization checks protect every customer API.
 - Signed WhatsApp webhook with atomic contact/enquiry/message writes, duplicate protection and out-of-order first-touch correction.
+- Business-scoped sender aliases preserve enquiry continuity when WhatsApp withholds a phone; available WhatsApp usernames can fill missing display names.
 - Read-only ad → campaign/ad-set lookup, with durable pending work if Meta access fails.
 - Settings: connection readiness, read-only coexistence check, campaign retry and ad-to-package mapping.
+- Delivery health distinguishes credentials from actual saved messages; the visible Leads dashboard refreshes every 15 seconds. Recent delivery does not prove all enquiries were captured.
 - Missing names, phone numbers and click platforms are not invented.
 - Existing business records remain in Supabase. Legacy self-created administrators are not automatically trusted.
 - Operations, reports and some dashboard/finance panels remain labelled design previews. Network errors never fabricate saved records.
@@ -35,7 +37,7 @@ Database tests use an isolated local PostgreSQL cluster, never Supabase. Set JAP
 
 ## Rollout gates
 
-For the existing database, do not rerun the initial schema. Apply the verified-staff migration, the follow-up profile/attribution migration, then the explicitly approved administrator bootstrap only where it has not already been applied. The exact agency number's coexistence and CRM account subscription are verified; Meta app publication and a real-message acceptance test remain separate gates.
+For the existing database, do not rerun the initial schema or completed bootstrap. The verified-staff and profile/attribution migrations are already applied. Apply `supabase/migrations/20260920_whatsapp_sender_identity.sql` once **before deploying the repaired Worker**, after checking migration state. The 20 September audit found a messaging-permission gap and no new stored messages after early 17 September IST. Meta callback testing succeeded, but production permissions, the new migration/deployment and fresh normal/ad-message acceptance checks remain outstanding. See the setup guide for current evidence and account-access blockers.
 
 While email is paused, set `JAPS_CRM_AUTH_MODE=temporary_password`, `JAPS_CRM_TEMP_ADMIN_EMAIL` and a future `JAPS_CRM_TEMP_ADMIN_EXPIRES_AT`. Only that already-confirmed, approved Admin/Owner can sign in. Supabase stores the password; never place it in source or frontend configuration. Missing/expired configuration fails closed. Email endpoints are disabled in password mode.
 
