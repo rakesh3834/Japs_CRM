@@ -2,12 +2,14 @@
 
 ## Delivery audit — 20 September 2026
 
-### Repair progress — 20 September, 13:17 UTC
+### Verified repair release — 20 September 2026
 
-- The owner completed Meta verification. The replacement server token now returns granted `ads_read`, `whatsapp_business_management`, and `whatsapp_business_messaging`. It is stored as the secret `META_WHATSAPP_ACCESS_TOKEN` in Sites environment revision 7, pending the repaired deployment. The working ads token was left unchanged. The exact existing WABA subscription was refreshed successfully; no number or ad settings were changed.
+- The owner completed Meta verification. The replacement server token now returns granted `ads_read`, `whatsapp_business_management`, and `whatsapp_business_messaging`. It is deployed as the secret `META_WHATSAPP_ACCESS_TOKEN` in Sites environment revision 7. The working ads token was left unchanged. The exact existing WABA subscription was refreshed successfully; no number or ad settings were changed.
 - The reviewed `20260920_whatsapp_sender_identity.sql` migration was applied once in production. Postflight matched the tested wrapper/legacy function hashes and server-only grants, and confirmed alias row-level security. Record counts remained **6 contacts, 3 leads, 4 messages and 2 contact links** across the migration.
 - Two additional real messages reached production during the repair: an audio message received **13:08:05 UTC** and a text message received **13:11:43 UTC** on 20 September. Both were stored without an error and linked to leads; neither carried ad-referral data. This is evidence of resumed inbound delivery, not proof of all historical or future enquiries or of fresh ad attribution.
-- Reviewed application fixes pass 25 automated tests, isolated PostgreSQL migration/identity/concurrency tests, and the production build. Fresh **post-deployment normal-message and actual-ad acceptance tests** remain required. No historical completeness claim is justified.
+- Reviewed application fixes pass 25 automated tests, isolated PostgreSQL migration/identity/concurrency tests, and the production build. [PR 5](https://github.com/rakesh3834/Japs_CRM/pull/5) was reviewed and merged. Sites version 8 deployed commit `d13ab261bea40827af127ebfac04522c6c5338dd` successfully at **13:23:26 UTC**, using environment revision 7.
+- **Fresh live capture verified:** seven post-deployment messages were saved across three enquiries by **13:27:28 UTC**, including two ad referrals. Four messages grouped under one enquiry. New ad `120251072384580524` resolved to campaign **Manali Sept 13**, with available name, phone, first message, ad/ad-set details and attribution status `ready`. Exact FB/IG click platform was not supplied and remains unknown. Normal incoming messages without an ad referral were also stored. The authenticated Leads API showed this fresh attribution; no recorded message errors or pending campaign lookups remained at **13:29 UTC**.
+- Production administrator sign-in, approved-staff reads and coexistence/permission checks passed. Anonymous customer reads, unsigned webhook POSTs and replay after logout were rejected. The private temporary token-transfer copy was removed after server-secret storage. Owner confirmation of normal Business app use is still requested. These observations establish fresh intake, **not completeness since 17 September or a guarantee against future interruptions**.
 
 ### Earlier audit findings (before the repair above)
 
@@ -36,11 +38,11 @@ Source: [Meta webhook permissions](https://developers.facebook.com/documentation
 - **Email-login/sender setup is paused at the user's request.** Custom SMTP remains off and no sender account or paid plan has been created. The provided website is `travelwithjaps.in`; its DNS is managed by someone else. Do not make email setup a prerequisite for the WhatsApp receiver, and do not remove customer-data access protections to skip it.
 - **Still pending:** upstream permission repair and fresh owner-controlled acceptance checks described in the current audit. The historical enquiry alone does not prove continued delivery.
 
-## Current priority: repair live delivery; keep email setup paused
+## Current priority: reconcile the historical gap; keep email setup paused
 
 The webhook route runs before staff authentication and does not call Supabase Auth or an email provider. Its runtime dependencies are the Meta signing/verification secrets, a reachable Supabase database with the ingestion migration, and an explicitly enabled matching WABA/phone connection. Campaign enrichment separately needs authorized Marketing API access. This permits receiver rollout without completing staff sign-in.
 
-Keep the existing agency number and ads unchanged. Coexistence, callback reachability, account subscription and authenticated CRM reads have been verified, but continuous message delivery has not. Repair permissions and finish the fresh owner-controlled tests without weakening staff authentication or exposing customer records.
+Keep the existing agency number and ads unchanged. Coexistence, callback reachability, messaging permission, account subscription and authenticated CRM reads have been verified. Fresh normal and ad-message delivery is demonstrated above. Reconcile the earlier gap from the original Business app conversations; current delivery does not retroactively recover missed messages. Keep staff authentication and customer-data protections in place.
 
 The website footer's linked privacy page, `https://travelwithjaps.in/privacy`, returned 404 in the 17 September read-only check. That separate website issue was not changed; Meta now uses the approved GitHub Pages mirror, which passed its crawler check.
 
@@ -80,7 +82,7 @@ Sources: [Supabase email OTP](https://supabase.com/docs/guides/auth/auth-email-p
 | Agency phone number | 1104024252793908 |
 | Ad account | 1014327913183517 |
 
-1. **Permission repair completed (20 September):** the owner-approved replacement has `whatsapp_business_messaging` plus the existing authorized management and ads-read grants. It also bundles send/media capabilities; no outbound customer messaging is authorized by this rollout. The replacement is stored as `META_WHATSAPP_ACCESS_TOKEN`, never in chat or frontend code. Account access and granted scopes were checked; the repaired deployment must apply the new environment revision.
+1. **Permission repair completed (20 September):** the owner-approved replacement has `whatsapp_business_messaging` plus the existing authorized management and ads-read grants. It also bundles send/media capabilities; no outbound customer messaging is authorized by this rollout. The replacement is deployed as `META_WHATSAPP_ACCESS_TOKEN`, never in chat or frontend code. Account access and granted scopes were checked again through the live CRM.
 2. **Completed and rechecked on 17 September:** authorized GET of `is_on_biz_app,platform_type` returned `true` and `CLOUD_API`; the WABA's `/phone_numbers` edge verified the exact agency number. Staff sign-in and the persistent read credential are now configured, so CRM Settings can repeat the read-only check. An access failure would not prove coexistence is absent.
 3. **Not needed for the current, already confirmed connection.** If future onboarding is needed, resolve eligibility for Meta’s supported Embedded Signup coexistence route. Current documentation has provider prerequisites for implementing it. A generic Facebook Login configuration or the API Setup “From” dropdown does not complete this onboarding. Resolve eligibility before any irreversible Tech Provider declaration or provider purchase.
 4. If the route is available and approved, connect the **existing Business app account** through Meta’s official verification/QR flow. Keep returned WABA/phone IDs. Do not run the standard phone `/register` step for the coexistence number.
