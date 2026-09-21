@@ -2,6 +2,7 @@ import { useState } from "react";
 import { ChevronRight, Plus, Clock3 } from "lucide-react";
 import { LeadFacts, leadStatuses } from "./Management.jsx";
 import { indianDay, timeInIndia } from "./record-time.js";
+import { statusSlug } from "../../shared/lead-statuses.js";
 
 export function LeadTimestamps({ lead }) {
   return <dl className="lead-timestamps">{[["First message sent", lead.first_message_at], ["Captured in CRM", lead.created_at], ["Last message sent", lead.last_message_at], ["Last updated", lead.updated_at]].map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value ? <time dateTime={value}>{timeInIndia(value)}</time> : label.includes("message") ? "No message recorded" : "Not recorded"}</dd></div>)}</dl>;
@@ -16,7 +17,7 @@ export function LeadsWorkspace({ leads, onQuickAdd, onEdit, onRefresh, onMore, i
     <div className="leads-results"><strong>{visible.length} loaded {visible.length === 1 ? "lead" : "leads"}</strong>{source && <button className="filter-chip" onClick={() => setSource("")}>{source} ×</button>}{(day || filter !== "All leads") && <button className="text-button" onClick={() => { setDay(""); setFilter("All leads"); setSource(""); }}>Clear filters</button>}<span><Clock3 size={14} />All timestamps are IST</span></div>
     <div className="lead-records">{visible.map((lead) => <article className="card lead-record" key={lead.uuid}>
       <button className="lead-record-main" onClick={() => onEdit(lead)} aria-label={`Review lead ${lead.name}`}>
-        <div className="lead-record-heading"><span className="initials mint">{lead.name.slice(0, 2).toUpperCase()}</span><span className="lead-identity"><strong>{lead.name}</strong><span>{lead.phone || "Phone not supplied"}{lead.email ? ` · ${lead.email}` : ""}</span></span><span className={`stage-pill stage-${lead.status.toLowerCase()}`}>{lead.status}</span><ChevronRight size={20} /></div>
+        <div className="lead-record-heading"><span className="initials mint">{lead.name.slice(0, 2).toUpperCase()}</span><span className="lead-identity"><strong>{lead.name}</strong><span>{lead.phone || "Phone not supplied"}{lead.email ? ` · ${lead.email}` : ""}</span></span><span className={`stage-pill stage-${statusSlug(lead.status)}`}>{lead.status}</span><ChevronRight size={20} /></div>
         <div className="lead-brief-grid"><div><small>Trip brief</small><strong>{lead.destination}</strong><span>{lead.dates}</span><span>{lead.travelers}</span></div><div><small>Next action · {lead.owner}</small><strong>{lead.next}</strong><span className="lead-note-preview">{lead.notes || "No review notes added"}</span>{lead.status === "Lost" && lead.lost_reason && <span>Lost reason: {lead.lost_reason}</span>}</div><div><small>Budget</small><strong>{lead.budget == null ? "Not supplied" : new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR" }).format(lead.budget)}</strong><small>Campaign / source</small><span>{lead.campaign_name || lead.source}</span><span className="subtle">Click platform: {lead.source_platform || "Not supplied"}</span></div></div>
       </button>
       <LeadTimestamps lead={lead} />

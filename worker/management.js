@@ -1,6 +1,7 @@
 import { HttpError, bodyJson, database, json, requireRole } from "./platform.js";
 
-export const LEAD_STATUSES = ["Inbox", "Qualified", "Discovery", "Proposal", "Negotiation", "Won", "Lost", "Nurture"];
+import { LEAD_STATUSES } from "../shared/lead-statuses.js";
+export { LEAD_STATUSES };
 const SALES = ["Admin", "Owner", "Sales", "Operations"];
 const FINANCE = ["Admin", "Owner", "Finance"];
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

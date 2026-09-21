@@ -218,6 +218,7 @@ test("accepted ad enquiries schedule campaign lookup once per ad after persisten
   t.mock.method(globalThis, "fetch", async (url, init = {}) => {
     const parsed = new URL(url); calls.push(parsed.pathname);
     if (parsed.pathname.endsWith("/rpc/crm_ingest_whatsapp_message")) return reply({ accepted: true, organization_id: env.JAPS_CRM_ORGANIZATION_ID });
+    if (parsed.pathname.endsWith("/rpc/crm_reconcile_ad_messages")) return reply({ promoted: 1 });
     if (parsed.hostname === "graph.facebook.com") {
       assert.equal(init.headers.Authorization, "Bearer test-ads-token");
       assert.equal(parsed.searchParams.has("access_token"), false);
@@ -250,10 +251,24 @@ test("an inactive or unmapped account is not counted as an accepted enquiry", as
   assert.deepEqual(await response.json(), { ok: true, received: 0 });
 });
 
-test("successful campaign metadata is cached and cannot be downgraded by retry", async (t) => {
-  let calls = 0;
-  t.mock.method(globalThis, "fetch", async () => { calls++; return reply([{ enrichment_status: "ready" }]); });
-  await enrichAd(env, env.JAPS_CRM_ORGANIZATION_ID, "12345678"); assert.equal(calls, 1);
+test("ignored organic chats are acknowledged without counting leads or fetching ads", async (t) => {
+  t.mock.method(globalThis, "fetch", async (url) => {
+    assert.ok(String(url).endsWith('/rpc/crm_ingest_whatsapp_message'));
+    return reply({accepted:true,ignored:true,reason:'not_an_ad_enquiry'});
+  });
+  const response=await worker.fetch(signed(payload([{...message,referral:undefined}])),env,{waitUntil:()=>assert.fail('No attribution for organic chat')});
+  assert.equal(response.status,200); assert.deepEqual(await response.json(),{ok:true,received:0});
+});
+
+test("cached campaign metadata still promotes pending ad messages without a Graph call", async (t) => {
+  const calls = [];
+  t.mock.method(globalThis, "fetch", async (url, init) => {
+    calls.push(new URL(url).pathname);
+    if (String(url).includes('/rpc/')) { assert.deepEqual(JSON.parse(init.body), {p_organization_id:env.JAPS_CRM_ORGANIZATION_ID}); return reply({promoted:1}); }
+    return reply([{ enrichment_status: "ready" }]);
+  });
+  await enrichAd(env, env.JAPS_CRM_ORGANIZATION_ID, "12345678");
+  assert.deepEqual(calls, ['/rest/v1/meta_ad_attribution','/rest/v1/rpc/crm_reconcile_ad_messages']);
 });
 
 test("malformed and oversized public payloads fail without ingesting data", async () => {

@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { ChevronRight, Plus, X } from "lucide-react";
 import { timeInIndia } from "./record-time.js";
 
-export const leadStatuses = ["Inbox", "Qualified", "Discovery", "Proposal", "Negotiation", "Won", "Lost", "Nurture"];
+export { LEAD_STATUSES as leadStatuses } from "../../shared/lead-statuses.js";
+import { LEAD_STATUSES as leadStatuses } from "../../shared/lead-statuses.js";
 export const canManage = (user) => ["Admin", "Owner", "Sales", "Operations"].includes(user?.role);
 export const canFinance = (user) => ["Admin", "Owner", "Finance"].includes(user?.role);
 const money = (value) => new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 2 }).format(value || 0);
@@ -49,7 +50,7 @@ export function LeadEditor({ lead, api, user, onClose, onSaved }) {
     {field("Next action", <input maxLength={500} value={form.next_action} onChange={update("next_action")} />)}
     {field("Lead notes", <textarea rows="4" maxLength={6000} value={form.notes} onChange={update("notes")} />)}
     {form.status === "Lost" && field("Lost reason", <input maxLength={500} value={form.lost_reason} onChange={update("lost_reason")} />)}
-    <p className="record-help">Name, email and phone can be updated in Contacts. Original message and ad attribution stay unchanged. A new message after Won or Lost starts a new enquiry.</p>
+    <p className="record-help">Name, email and phone can be updated in Contacts. Repeat messages from the same Meta campaign and original sender phone update the same lead, including after Won or Lost. Your review status is never reset automatically.</p>
     <details className="record-source"><summary>Original enquiry & attribution</summary><LeadFacts lead={lead} /></details>
   </Editor>;
 }
