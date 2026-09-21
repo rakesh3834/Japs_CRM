@@ -50,7 +50,7 @@ export function normalizeMessages(payload, diagnostics = {}) {
 
 export async function receiveWebhook(request, env, ctx) {
   const started = Date.now();
-  const diagnostics = { request_id: crypto.randomUUID(), candidates: 0, stored: 0, duplicates: 0, error_records: 0, ignored: 0, unmapped: 0, missing_identity: 0, value_errors: 0 };
+  const diagnostics = { request_id: crypto.randomUUID(), candidates: 0, stored: 0, pending: 0, duplicates: 0, error_records: 0, ignored: 0, unmapped: 0, missing_identity: 0, value_errors: 0 };
   const report = (status) => {
     // Never include payloads, sender IDs, headers, tokens or customer text.
     const warning = status >= 400 || diagnostics.unmapped || diagnostics.missing_identity || diagnostics.value_errors || diagnostics.error_records;
@@ -80,7 +80,9 @@ export async function receiveWebhook(request, env, ctx) {
     // A wrong or unconfigured account cannot write into the default organization.
     const result = await rpc(env, "crm_ingest_whatsapp_message", { p_message: message });
     if (result?.accepted) {
+      if (result.ignored) { diagnostics.ignored++; continue; }
       stored++;
+      if (result.pending) diagnostics.pending++;
       if (result.duplicate) diagnostics.duplicates++;
       else if (message.error_code) diagnostics.error_records++;
       else diagnostics.stored++;
@@ -115,30 +117,36 @@ export async function graphGet(env, path, fields, token) {
 export async function enrichAd(env, org, adId) {
   if (!metaId(adId)) return;
   const current = await database(env, "meta_ad_attribution", { organization_id: `eq.${org}`, ad_id: `eq.${adId}`, select: "enrichment_status", limit: "1" });
-  if (current?.[0]?.enrichment_status === "ready") return;
+  const reconcile = () => rpc(env, "crm_reconcile_ad_messages", { p_organization_id: org });
+  if (current?.[0]?.enrichment_status === "ready") { await reconcile(); return; }
   const token = env.META_ADS_ACCESS_TOKEN;
   const base = { organization_id: org, ad_id: adId, last_attempt_at: new Date().toISOString() };
   const save = (data) => database(env, "meta_ad_attribution", { on_conflict: "organization_id,ad_id" }, { method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify({ ...base, ...data }) });
-  if (!token || !env.META_AD_ACCOUNT_ID) { await save({ enrichment_status: "needs_access" }); return; }
+  // A slower failing lookup must never overwrite another request's verified result.
+  const fail = (data) => database(env, "meta_ad_attribution", { organization_id: `eq.${org}`, ad_id: `eq.${adId}`, enrichment_status: "neq.ready" }, { method: "PATCH", headers: {Prefer:"return=minimal"}, body: JSON.stringify({last_attempt_at:base.last_attempt_at,...data}) });
+  if (!token || !env.META_AD_ACCOUNT_ID) { await fail({ enrichment_status: "needs_access" }); return; }
   try {
     const ad = await graphGet(env, adId, "id,name,account_id,campaign{id,name},adset{id,name},effective_status", token);
     if (String(ad.account_id) !== env.META_AD_ACCOUNT_ID) throw new HttpError(403, "Ad belongs to a different account.");
+    if (!metaId(ad.campaign?.id)) throw new HttpError(502, "Meta did not supply a campaign ID.");
     await save({ ad_name: ad.name || null, campaign_id: ad.campaign?.id || null, campaign_name: ad.campaign?.name || null, adset_id: ad.adset?.id || null, adset_name: ad.adset?.name || null, enrichment_status: "ready", last_error: null, enriched_at: new Date().toISOString() });
-  } catch (error) { await save({ enrichment_status: "retry", last_error: error instanceof HttpError ? error.message : "Meta enrichment unavailable." }); }
+  } catch (error) { await fail({ enrichment_status: "retry", last_error: error instanceof HttpError ? error.message : "Meta enrichment unavailable." }); return; }
+  await reconcile();
 }
 
 export async function integrationStatus(env, user) {
   requireRole(user, ["Owner", "Admin"]);
   const org = organizationId(env);
-  const [connections, pending, recent, latest, errors] = await Promise.all([
+  const [connections, pending, recent, latest, errors, waiting] = await Promise.all([
     database(env, "whatsapp_connections", { organization_id: `eq.${org}`, select: "phone_number_id,waba_id,display_phone_number,active,last_message_at" }),
     database(env, "meta_ad_attribution", { organization_id: `eq.${org}`, enrichment_status: "neq.ready", select: "ad_id,enrichment_status,last_error", limit: "20" }),
     database(env, "whatsapp_messages", { organization_id: `eq.${org}`, select: "received_at,error_code,message_type", order: "received_at.desc", limit: "5" }),
     database(env, "whatsapp_messages", { organization_id: `eq.${org}`, lead_id: "not.is.null", error_code: "is.null", select: "received_at", order: "received_at.desc", limit: "1" }),
     database(env, "whatsapp_messages", { organization_id: `eq.${org}`, error_code: "not.is.null", select: "received_at,error_code", order: "received_at.desc", limit: "5" }),
+    database(env, "whatsapp_messages", { organization_id: `eq.${org}`, disposition: "eq.pending", error_code: "is.null", select: "received_at,sender_phone", limit: "100" }),
   ]);
   const lastStoredAt = latest[0]?.received_at || null;
-  return json({ ok: true, configured: { signing: Boolean(env.META_APP_SECRET), verification: Boolean(env.META_WEBHOOK_VERIFY_TOKEN), ads_read: Boolean(env.META_ADS_ACCESS_TOKEN), whatsapp_read: Boolean(env.META_WHATSAPP_ACCESS_TOKEN) }, connections, pending, recent,
+  return json({ ok: true, intake_policy: "meta_ads_only", waiting: { total: waiting.length, missing_phone: waiting.filter((m) => !m.sender_phone).length, capped: waiting.length === 100 }, configured: { signing: Boolean(env.META_APP_SECRET), verification: Boolean(env.META_WEBHOOK_VERIFY_TOKEN), ads_read: Boolean(env.META_ADS_ACCESS_TOKEN), whatsapp_read: Boolean(env.META_WHATSAPP_ACCESS_TOKEN) }, connections, pending, recent,
     callback_path: "/api/webhooks/whatsapp", delivery: { checked_at: new Date().toISOString(), last_stored_at: lastStoredAt, recent_delivery_observed: Boolean(lastStoredAt && Date.now() - Date.parse(lastStoredAt) < 86400000), completeness_verified: false }, errors });
 }
 
@@ -147,6 +155,7 @@ export async function integrationAction(request, env, user, action) {
   if (action === "retry-attribution") {
     const pending = await database(env, "meta_ad_attribution", { organization_id: `eq.${organizationId(env)}`, enrichment_status: "neq.ready", select: "ad_id", order: "last_attempt_at.asc.nullsfirst,ad_id.asc", limit: "3" });
     await Promise.all((pending || []).map((row) => enrichAd(env, user.organization_id, row.ad_id)));
+    await rpc(env, "crm_reconcile_ad_messages", { p_organization_id: user.organization_id });
     return json({ ok: true, attempted: pending?.length || 0 });
   }
   if (action === "check-coexistence") {

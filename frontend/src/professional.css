@@ -54,8 +54,15 @@ button, input, select, textarea { font: inherit; }
 .day-bar:hover i { background: #18585a; }
 .chart-foot { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; color: #687d77; padding: 14px 24px 20px; }
 .status-chart { padding: 14px 24px 22px; display: grid; gap: 5px; }
-.status-chart button { display: grid; grid-template-columns: 94px minmax(40px, 1fr) 24px 14px; gap: 12px; align-items: center; padding: 6px 0; border: 0; background: transparent; text-align: left; color: #34574f; font-size: 14px; }
+.status-chart button { display: grid; grid-template-columns: minmax(130px, 1.1fr) minmax(40px, 1fr) 24px 14px; gap: 12px; align-items: center; padding: 6px 0; border: 0; background: transparent; text-align: left; color: #34574f; font-size: 14px; overflow-wrap: anywhere; }
 .status-chart button:hover { color: #147866; }
+.stage-requirement-captured { color: #276e56; background: #e4f4ec; }
+.stage-travel-later, .stage-call-later { color: #755781; background: #f3eafa; }
+.stage-quotation-sent { color: #635197; background: #eeebfc; }
+.stage-follow-up { color: #356a8e; background: #e7f1fa; }
+.stage-payment-negotiation { color: #8c601b; background: #fff3d9; }
+.stage-no-response { color: #666d71; background: #edf0f1; }
+.status-track .pipeline-payment-negotiation { background: #d49b47; }
 .status-chart strong { text-align: right; }
 .status-track, .source-track { height: 8px; background: #edf3f0; border-radius: 10px; overflow: hidden; }
 .status-track i, .source-track i { height: 100%; display: block; border-radius: inherit; background: #509c8d; }
@@ -135,7 +142,7 @@ button, input, select, textarea { font: inherit; }
   .overview-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }.overview-metric { padding: 15px; }.overview-metric > strong { font-size: 27px; }.overview-metric > small { font-size: 12px; }
   .card > .card-header { padding: 18px; flex-wrap: wrap; }.card-header h2 { font-size: 17px; }
   .chart-summary { padding: 15px 18px 0; }.enquiry-bars { padding: 16px 18px 0; height: 190px; gap: 5px; }.chart-foot { padding: 14px 18px 18px; }.chart-foot span:nth-child(2) { display: none; }
-  .status-chart { padding: 12px 18px 18px; }.status-chart button { grid-template-columns: 90px minmax(30px, 1fr) 23px 14px; gap: 8px; }
+  .status-chart { padding: 12px 18px 18px; }.status-chart button { grid-template-columns: minmax(105px, 1.2fr) minmax(24px, 1fr) 23px 14px; gap: 8px; }
   .record-list-row { padding: 16px 18px; gap: 10px; }.recent-lead-copy { flex-basis: calc(100% - 50px) !important; }.record-list-row .stage-pill { margin-left: 48px; }
   .workspace-toolbar { gap: 12px; }.workspace-toolbar label { min-width: 0; flex: 1 1 135px; }.workspace-toolbar select, .workspace-toolbar input { min-width: 0; max-width: 100%; width: 100%; }.workspace-toolbar > button { margin-left: 0; }.toolbar-search { max-width: none; }
   .leads-results > span { margin-left: 0; }.lead-record-main { padding: 18px; }.lead-record-heading { flex-wrap: wrap; gap: 10px; }.lead-identity { flex-basis: calc(100% - 50px); }.lead-record-heading .stage-pill { margin-left: 48px; }.lead-record-heading > svg { margin-left: auto; }

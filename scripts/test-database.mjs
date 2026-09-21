@@ -38,6 +38,20 @@ try {
   const identityCounts = run("psql", [...psql, "-Atc", "select (select count(*) from leads),(select count(*) from contacts),(select count(*) from whatsapp_messages)"]).trim();
   if (identityCounts !== "2|2|13") throw new Error(`Mixed identity concurrency assertion failed: ${identityCounts}`);
   console.log("Passed: concurrent phone/BSUID follow-ups retain one customer and deduplicate retries.");
+  for (const file of ["tests/ads-repair-fixtures.sql", "supabase/migrations/20260921_meta_ads_only.sql", "tests/ads-only-assertions.sql"]) {
+    run("psql", [...psql, "-f", resolve(file)]); console.log(`Passed: ${file}`);
+  }
+  // Historical ordinary chats are archived, not deleted, and snapshots remain recoverable.
+  const repaired = run("psql", [...psql, "-Atc", "select (select count(*) from leads where deleted_at is null),(select count(*) from leads),(select count(*) from crm_intake_repair_journal where table_name='leads')"]).trim();
+  if (repaired !== "1|6|5") throw new Error(`Archive preservation failed: ${repaired}`);
+  run("psql", [...psql, "-c", "insert into meta_ad_attribution(organization_id,ad_id,campaign_id,enrichment_status) values ('00000000-0000-4000-8000-000000000001','55555555','55550000','ready'),('00000000-0000-4000-8000-000000000001','55555556','55550000','ready')"]);
+  await Promise.all(Array.from({ length: 12 }, (_, i) => {
+    const msg = { phone_number_id: "1104024252793908", waba_id: "1728980918069286", message_id: `ads-parallel-${i % 6}`, sender_id: "919800000005", phone: "+919800000005", message_type: "text", message_text: "Ad concurrency test", referral: {source_type:"ad",source_id:i%2 ? "55555555":"55555556"} };
+    return runAsync(join(bin, "psql"), [...psql, "-c", `select public.crm_ingest_whatsapp_message('${JSON.stringify(msg)}'::jsonb)`]);
+  }));
+  const unique = run("psql", [...psql, "-Atc", "select (select count(*) from leads where intake_campaign_id='55550000'),(select count(*) from whatsapp_messages where message_id like 'ads-parallel-%')"]).trim();
+  if (unique !== "1|6") throw new Error(`Campaign concurrency failed: ${unique}`);
+  console.log("Passed: 12 competing ad deliveries, two ads in one campaign → 1 lead and 6 messages.");
 } catch (error) {
   console.error(error.stderr?.toString() || error.message); process.exitCode = 1;
 } finally {

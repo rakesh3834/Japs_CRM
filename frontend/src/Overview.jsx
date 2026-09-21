@@ -1,6 +1,7 @@
 import { ChevronRight, Plus, Activity, Clock3 } from "lucide-react";
 import { canManage, leadStatuses } from "./Management.jsx";
 import { timeInIndia } from "./record-time.js";
+import { statusSlug } from "../../shared/lead-statuses.js";
 
 const money = (value) => new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 2 }).format(value || 0);
 function Metric({ label, value, hint, onClick, accent }) {
@@ -26,7 +27,7 @@ export function Overview({ data, currentUser, onNavigate, onEdit, onQuickAdd }) 
       <Metric label="Customer due" value={money(stats.customer_due)} hint="Unpaid manual ledger entries" onClick={() => onNavigate("Money", { status: "Incoming due" })} />
       <Metric label="Trips at risk" value={stats.margin_at_risk} hint="Review trip delivery" onClick={() => onNavigate("Trips", { status: "At risk" })} />
     </section>
-    <div className="capture-notice"><Activity size={20} /><div><strong>WhatsApp enquiries</strong><p>Captured after a customer sends a message. This workspace checks for updates every 15 seconds.</p></div><button className="card-action" onClick={() => onNavigate("Settings")}>Connection details<ChevronRight size={16} /></button></div>
+    <div className="capture-notice"><Activity size={20} /><div><strong>Meta ad enquiries only</strong><p>Automatically captured after an ad-referred message, once campaign and sender phone are verified. Ordinary chats do not create leads. Updates are checked every 15 seconds.</p></div><button className="card-action" onClick={() => onNavigate("Settings")}>Connection details<ChevronRight size={16} /></button></div>
     <div className="overview-charts">
       <Panel title="New enquiries" subtitle="Last 14 days · CRM capture date in IST" action={link("View leads", "Leads")}>
         <div className="chart-summary"><strong>{a.daily.reduce((n, d) => n + d.count, 0)}</strong><span>enquiries in this period</span></div>
@@ -34,12 +35,12 @@ export function Overview({ data, currentUser, onNavigate, onEdit, onQuickAdd }) 
         <div className="chart-foot"><span>{new Date(`${a.daily[0].date}T00:00:00Z`).toLocaleDateString("en-IN", { day: "numeric", month: "short", timeZone: "UTC" })}</span><span>Select a day to review its enquiries</span><span>Today</span></div>
       </Panel>
       <Panel title="Lead pipeline" subtitle="Current statuses · all enquiries, not conversion rates">
-        <div className="status-chart">{stages.map(({ label, count }) => <button key={label} onClick={() => onNavigate("Leads", { status: label })} aria-label={`${label}: ${count} leads`}><span>{label}</span><span className="status-track"><i className={`pipeline-${label.toLowerCase()}`} style={{ width: `${count / maxStage * 100}%` }} /></span><strong>{count}</strong><ChevronRight size={14} /></button>)}</div>
+        <div className="status-chart">{stages.map(({ label, count }) => <button key={label} onClick={() => onNavigate("Leads", { status: label })} aria-label={`${label}: ${count} leads`}><span>{label}</span><span className="status-track"><i className={`pipeline-${statusSlug(label)}`} style={{ width: `${count / maxStage * 100}%` }} /></span><strong>{count}</strong><ChevronRight size={14} /></button>)}</div>
       </Panel>
     </div>
     <div className="overview-lower">
       <Panel title="Recent enquiries" subtitle="Newest captured first · open to review or update" action={link("All leads", "Leads")}>
-        {data.leads.length ? data.leads.map((lead) => <button className="record-list-row" key={lead.uuid} onClick={() => onEdit(lead)}><span className="initials mint">{lead.name.slice(0, 2).toUpperCase()}</span><span className="recent-lead-copy"><strong>{lead.name}</strong><small>{lead.campaign_name || lead.source} · {lead.destination}</small><small><Clock3 size={12} /> Captured {timeInIndia(lead.created_at)}</small></span><span className={`stage-pill stage-${lead.status.toLowerCase()}`}>{lead.status}</span><ChevronRight size={16} /></button>) : <p className="empty-records">No enquiries captured yet.</p>}
+        {data.leads.length ? data.leads.map((lead) => <button className="record-list-row" key={lead.uuid} onClick={() => onEdit(lead)}><span className="initials mint">{lead.name.slice(0, 2).toUpperCase()}</span><span className="recent-lead-copy"><strong>{lead.name}</strong><small>{lead.campaign_name || lead.source} · {lead.destination}</small><small><Clock3 size={12} /> Captured {timeInIndia(lead.created_at)}</small></span><span className={`stage-pill stage-${statusSlug(lead.status)}`}>{lead.status}</span><ChevronRight size={16} /></button>) : <p className="empty-records">No enquiries captured yet.</p>}
       </Panel>
       <Panel title="Enquiry sources" subtitle="Recorded channels · not inferred ad placements">
         <div className="source-chart">{a.sources.map(({ label, count }) => <button key={label} onClick={() => onNavigate("Leads", { source: label })}><span><strong>{label}</strong><small>{count} {count === 1 ? "enquiry" : "enquiries"}</small></span><span className="source-track"><i style={{ width: `${count / Math.max(1, a.total_leads) * 100}%` }} /></span><ChevronRight size={15} /></button>)}</div>

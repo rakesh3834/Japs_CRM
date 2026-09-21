@@ -2,10 +2,17 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import worker from "../worker/index.js";
 import { contactChanges, contactVersion, leadChanges, paymentChanges, tripAmounts } from "../worker/management.js";
+import { LEAD_STATUSES, statusSlug } from "../shared/lead-statuses.js";
 
 const org = "00000000-0000-4000-8000-000000000001";
 const id = "10000000-0000-4000-8000-000000000001";
 const timestamp = "2026-09-20T00:00:00.000Z";
+test("agency review statuses are accepted exactly and use stable CSS slugs", () => {
+  for (const status of LEAD_STATUSES) assert.equal(leadChanges({status}, {}).status,status);
+  for (const status of ['Qualified','Discovery','Proposal','Negotiation','Nurture','Follow Up']) assert.throws(()=>leadChanges({status},{}));
+  assert.equal(statusSlug('Payment / Negotiation'),'payment-negotiation');
+  assert.equal(statusSlug('Requirement_Captured'),'requirement-captured');
+});
 const env = { SUPABASE_URL: "https://test.supabase.co", SUPABASE_SERVICE_ROLE_KEY: "test-key", JAPS_CRM_APP_ORIGIN: "https://crm.example", JAPS_CRM_ORGANIZATION_ID: org, JAPS_CRM_AUTH_MODE: "email" };
 const reply = (body) => new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json" } });
 function request(path, method = "GET", body, origin = env.JAPS_CRM_APP_ORIGIN, cookie = "verified") { return new Request(`https://crm.example/api/${path}`, { method, headers: { Origin: origin, "Content-Type": "application/json", Cookie: cookie ? `japs_verified_session=${cookie}` : "" }, ...(body ? { body: JSON.stringify(body) } : {}) }); }
@@ -28,7 +35,7 @@ test("management rejects invalid statuses, excess precision, identity replacemen
 });
 test("PATCH needs a staff session, same origin and an allowed role", async (t) => {
   mockDatabase(t, () => assert.fail("No record access expected"), "Read-only");
-  const body = { updated_at: timestamp, status: "Qualified" };
+  const body = { updated_at: timestamp, status: "Requirement_Captured" };
   assert.equal((await worker.fetch(request(`leads/${id}`, "PATCH", body, env.JAPS_CRM_APP_ORIGIN, ""), env)).status, 401);
   assert.equal((await worker.fetch(request(`leads/${id}`, "PATCH", body, "https://evil.example"), env)).status, 403);
   assert.equal((await worker.fetch(request(`leads/${id}`, "PATCH", body), env)).status, 403);
@@ -41,7 +48,7 @@ test("lead edits are organization scoped, preserve attribution and use atomic ve
     if (init.method === "PATCH") { writes++; assert.equal(url.searchParams.get("updated_at"), `eq.${timestamp}`); const body = JSON.parse(init.body); assert.deepEqual(Object.keys(body).sort(), ["notes", "status", "updated_at"]); return reply(conflict ? [] : [{ id, updated_at: body.updated_at }]); }
     return reply([{ id, updated_at: timestamp }]);
   });
-  assert.equal((await worker.fetch(request(`leads/${id}`, "PATCH", { status: "Qualified", notes: "Reviewed", updated_at: timestamp }), env)).status, 200);
+  assert.equal((await worker.fetch(request(`leads/${id}`, "PATCH", { status: "Requirement_Captured", notes: "Reviewed", updated_at: timestamp }), env)).status, 200);
   conflict = true;
   assert.equal((await worker.fetch(request(`leads/${id}`, "PATCH", { status: "Won", notes: "Updated", updated_at: timestamp }), env)).status, 409);
   assert.equal(writes, 2);
