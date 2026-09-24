@@ -177,7 +177,7 @@ function App() {
     return () => { window.clearInterval(interval); window.clearInterval(refreshInterval); document.removeEventListener("visibilitychange", check); document.removeEventListener("visibilitychange", refresh); };
   }, [currentUser]);
   async function loadMoreLeads() {
-    if (workspaceLoading.current || nextOffset === null) return;
+    if (workspaceLoading.current || nextOffset === null) return false;
     workspaceLoading.current = true;
     const session = generation.current;
     try {
@@ -186,8 +186,10 @@ function App() {
       setLeadsData((current) => [...new Map([...current, ...result.items].map((lead) => [lead.uuid, lead])).values()]);
       setNextOffset(result.next_offset);
       leadPages.current++;
+      return true;
     } catch (error) { if (session === generation.current) setToast(error.message); }
     finally { workspaceLoading.current = false; }
+    return false;
   }
 
   useEffect(() => {
