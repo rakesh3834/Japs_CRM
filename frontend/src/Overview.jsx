@@ -1,7 +1,7 @@
 import { ChevronRight, Plus, Activity, Clock3 } from "lucide-react";
-import { canManage, leadStatuses } from "./Management.jsx";
+import { canManage } from "./Management.jsx";
 import { timeInIndia } from "./record-time.js";
-import { statusSlug } from "../../shared/lead-statuses.js";
+import { PRIMARY_LEAD_STATUSES, normalizeLeadStatus, statusSlug } from "../../shared/lead-statuses.js";
 
 const money = (value) => new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 2 }).format(value || 0);
 function Metric({ label, value, hint, onClick, accent }) {
@@ -14,7 +14,7 @@ export function Overview({ data, currentUser, onNavigate, onEdit, onQuickAdd }) 
   const a = data?.analytics; const stats = data?.stats;
   if (!a) return <section className="card empty-records" role="status">Loading your workspace overview… If the connection fails, its status appears below.</section>;
   const maxDay = Math.max(1, ...a.daily.map((d) => d.count));
-  const stages = leadStatuses.map((label) => ({ label, count: a.stages.find((s) => s.label === label)?.count || 0 }));
+  const stages = PRIMARY_LEAD_STATUSES.map((label) => ({ label, count: a.stages.filter((stage) => normalizeLeadStatus(stage.label) === label).reduce((total, stage) => total + stage.count, 0) }));
   const maxStage = Math.max(1, ...stages.map((s) => s.count));
   const link = (label, target) => <button className="card-action" onClick={() => onNavigate(target)}>{label}<ChevronRight size={16} /></button>;
   return <div className="overview-workspace">

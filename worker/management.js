@@ -1,6 +1,6 @@
 import { HttpError, bodyJson, database, json, requireRole } from "./platform.js";
 
-import { LEAD_STATUSES } from "../shared/lead-statuses.js";
+import { LEAD_STATUSES, storedLeadStatus } from "../shared/lead-statuses.js";
 export { LEAD_STATUSES };
 const SALES = ["Admin", "Owner", "Sales", "Operations"];
 const FINANCE = ["Admin", "Owner", "Finance"];
@@ -48,7 +48,7 @@ async function updateRecord(env, user, table, id, expected, changes, guards = {}
 export function leadChanges(body, current) {
   keys(body, ["updated_at", "status", "destination", "start_date", "end_date", "travelers", "budget", "notes", "next_action", "lost_reason"]);
   const changes = {};
-  if ("status" in body) changes.status = choice(body.status, LEAD_STATUSES, "lead status");
+  if ("status" in body) changes.status = storedLeadStatus(choice(body.status, LEAD_STATUSES, "lead status"));
   for (const field of ["destination", "notes", "next_action", "lost_reason"]) if (field in body) changes[field] = text(body[field], field.replaceAll("_", " "), field === "notes" ? 6000 : 500);
   for (const field of ["start_date", "end_date"]) if (field in body) changes[field] = date(body[field], field.replaceAll("_", " "));
   const start = "start_date" in changes ? changes.start_date : current.start_date;

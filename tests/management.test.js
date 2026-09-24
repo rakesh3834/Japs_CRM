@@ -2,16 +2,16 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import worker from "../worker/index.js";
 import { contactChanges, contactVersion, leadChanges, paymentChanges, tripAmounts } from "../worker/management.js";
-import { LEAD_STATUSES, statusSlug } from "../shared/lead-statuses.js";
+import { LEAD_STATUSES, storedLeadStatus, statusSlug } from "../shared/lead-statuses.js";
 
 const org = "00000000-0000-4000-8000-000000000001";
 const id = "10000000-0000-4000-8000-000000000001";
 const timestamp = "2026-09-20T00:00:00.000Z";
-test("agency review statuses are accepted exactly and use stable CSS slugs", () => {
-  for (const status of LEAD_STATUSES) assert.equal(leadChanges({status}, {}).status,status);
+test("agency review statuses are accepted and translated to the deployed database labels", () => {
+  for (const status of LEAD_STATUSES) assert.equal(leadChanges({status}, {}).status,storedLeadStatus(status));
   for (const status of ['Qualified','Discovery','Proposal','Negotiation','Nurture','Follow Up']) assert.throws(()=>leadChanges({status},{}));
   assert.equal(statusSlug('Payment / Negotiation'),'payment-negotiation');
-  assert.equal(statusSlug('Requirement_Captured'),'requirement-captured');
+  assert.equal(statusSlug('Requirements captured'),'requirements-captured');
 });
 const env = { SUPABASE_URL: "https://test.supabase.co", SUPABASE_SERVICE_ROLE_KEY: "test-key", JAPS_CRM_APP_ORIGIN: "https://crm.example", JAPS_CRM_ORGANIZATION_ID: org, JAPS_CRM_AUTH_MODE: "email" };
 const reply = (body) => new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json" } });
@@ -48,7 +48,7 @@ test("lead edits are organization scoped, preserve attribution and use atomic ve
     if (init.method === "PATCH") { writes++; assert.equal(url.searchParams.get("updated_at"), `eq.${timestamp}`); const body = JSON.parse(init.body); assert.deepEqual(Object.keys(body).sort(), ["notes", "status", "updated_at"]); return reply(conflict ? [] : [{ id, updated_at: body.updated_at }]); }
     return reply([{ id, updated_at: timestamp }]);
   });
-  assert.equal((await worker.fetch(request(`leads/${id}`, "PATCH", { status: "Requirement_Captured", notes: "Reviewed", updated_at: timestamp }), env)).status, 200);
+  assert.equal((await worker.fetch(request(`leads/${id}`, "PATCH", { status: "Requirements captured", notes: "Reviewed", updated_at: timestamp }), env)).status, 200);
   conflict = true;
   assert.equal((await worker.fetch(request(`leads/${id}`, "PATCH", { status: "Won", notes: "Updated", updated_at: timestamp }), env)).status, 409);
   assert.equal(writes, 2);
