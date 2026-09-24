@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ChevronRight, ChevronDown, Plus, Clock3, Search, RefreshCw } from "lucide-react";
 import { LeadFacts } from "./Management.jsx";
 import { indianDay, timeInIndia } from "./record-time.js";
@@ -18,6 +18,8 @@ export function LeadsWorkspace({ leads, onQuickAdd, onEdit, onRefresh, onMore, i
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState("created_at");
   const [busy, setBusy] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [page, setPage] = useState(1);
   const [expandedLead, setExpandedLead] = useState(null);
   const canonicalLeads = useMemo(() => leads.map((lead) => ({ ...lead, status: normalizeLeadStatus(lead.status) })), [leads]);
   const counts = useMemo(() => Object.fromEntries([...PRIMARY_LEAD_STATUSES, ...otherStatuses].map((status) => [status, status === "All leads" ? canonicalLeads.length : status === "Open enquiries" ? canonicalLeads.filter((lead) => !["Won", "Lost"].includes(lead.status)).length : canonicalLeads.filter((lead) => lead.status === status).length])), [canonicalLeads]);
@@ -28,28 +30,42 @@ export function LeadsWorkspace({ leads, onQuickAdd, onEdit, onRefresh, onMore, i
     const matchesQuery = !query || [lead.name, lead.phone, lead.email, lead.campaign_name, lead.ad_name, lead.adset_name, lead.destination, lead.source].join(" ").toLowerCase().includes(query.trim().toLowerCase());
     return matchesStatus && matchesDay && matchesSource && matchesQuery;
   }).sort((a, b) => (Date.parse(b[sort]) || 0) - (Date.parse(a[sort]) || 0));
-  const clearFilters = () => { setDay(""); setSource(""); setQuery(""); setFilter("All leads"); };
+  const pageSize = 15;
+  const pageCount = Math.max(1, Math.ceil(visible.length / pageSize));
+  useEffect(() => { if (page > pageCount) setPage(pageCount); }, [page, pageCount]);
+  const pageLeads = visible.slice((page - 1) * pageSize, page * pageSize);
+  const firstVisible = visible.length ? (page - 1) * pageSize + 1 : 0;
+  const lastVisible = Math.min(page * pageSize, visible.length);
+  const changePage = (update) => { setPage(1); update(); };
+  const clearFilters = () => { setPage(1); setDay(""); setSource(""); setQuery(""); setFilter("All leads"); };
+  const goNext = async () => {
+    if (page < pageCount) { setPage((current) => current + 1); return; }
+    if (!onMore || loadingMore) return;
+    setLoadingMore(true);
+    try { if (await onMore()) setPage((current) => current + 1); }
+    finally { setLoadingMore(false); }
+  };
 
   return <>
     <div className="page-heading"><div><div className="eyebrow">Sales workspace</div><h1>Leads</h1><p>Review Meta ad enquiries, keep the trip brief current and plan the next action.</p></div>{onQuickAdd && <button className="primary-button" onClick={onQuickAdd}><Plus size={18} />Add lead</button>}</div>
 
     <nav className="lead-status-tabs" aria-label="Filter leads by working status">
-      {PRIMARY_LEAD_STATUSES.map((status) => <button key={status} className={filter === status ? "selected" : ""} aria-pressed={filter === status} onClick={() => setFilter(status)}><span>{status}</span><strong>{counts[status] || 0}</strong></button>)}
-      <div className="lead-other-status"><select value={otherStatuses.includes(filter) ? filter : ""} onChange={(event) => event.target.value && setFilter(event.target.value)} aria-label="Show all leads or another status"><option value="" disabled>Other statuses…</option>{otherStatuses.map((status) => <option key={status} value={status}>{status} ({counts[status] || 0})</option>)}</select></div>
+      {PRIMARY_LEAD_STATUSES.map((status) => <button key={status} className={filter === status ? "selected" : ""} aria-pressed={filter === status} onClick={() => changePage(() => setFilter(status))}><span>{status}</span><strong>{counts[status] || 0}</strong></button>)}
+      <div className="lead-other-status"><select value={otherStatuses.includes(filter) ? filter : ""} onChange={(event) => event.target.value && changePage(() => setFilter(event.target.value))} aria-label="Show all leads or another status"><option value="" disabled>Other statuses…</option>{otherStatuses.map((status) => <option key={status} value={status}>{status} ({counts[status] || 0})</option>)}</select></div>
     </nav>
 
     <div className="lead-table-toolbar">
-      <label className="lead-search"><span>Search</span><span className="lead-search-control"><Search size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Name, phone or campaign" aria-label="Search leads, phones or campaigns" /></span></label>
-      <label>Captured date (IST)<input type="date" value={day} onChange={(event) => setDay(event.target.value)} /></label>
-      <label>Sort by<select value={sort} onChange={(event) => setSort(event.target.value)}><option value="created_at">Newest captured</option><option value="updated_at">Recently updated</option><option value="last_message_at">Latest message</option></select></label>
-      <label>Source<select value={source} onChange={(event) => setSource(event.target.value)}><option value="">All sources</option>{[...new Set(canonicalLeads.map((lead) => lead.source).filter(Boolean))].sort().map((item) => <option key={item}>{item}</option>)}</select></label>
+      <label className="lead-search"><span>Search</span><span className="lead-search-control"><Search size={17} /><input value={query} onChange={(event) => changePage(() => setQuery(event.target.value))} placeholder="Name, phone or campaign" aria-label="Search leads, phones or campaigns" /></span></label>
+      <label>Captured date (IST)<input type="date" value={day} onChange={(event) => changePage(() => setDay(event.target.value))} /></label>
+      <label>Sort by<select value={sort} onChange={(event) => changePage(() => setSort(event.target.value))}><option value="created_at">Newest captured</option><option value="updated_at">Recently updated</option><option value="last_message_at">Latest message</option></select></label>
+      <label>Source<select value={source} onChange={(event) => changePage(() => setSource(event.target.value))}><option value="">All sources</option>{[...new Set(canonicalLeads.map((lead) => lead.source).filter(Boolean))].sort().map((item) => <option key={item}>{item}</option>)}</select></label>
       <button disabled={busy} className="secondary-button" onClick={async () => { setBusy(true); try { await onRefresh(); } finally { setBusy(false); } }}><RefreshCw size={15} />{busy ? "Refreshing…" : "Refresh"}</button>
     </div>
 
-    <div className="leads-results"><strong>{visible.length} shown</strong><span className="lead-loaded-count">{canonicalLeads.length} loaded</span>{(day || source || query || filter !== "Yet to contact") && <button className="text-button" onClick={clearFilters}>Clear filters</button>}<span><Clock3 size={14} />All timestamps are IST</span></div>
+    <div className="leads-results"><strong>{visible.length} matching</strong><span className="lead-loaded-count">{canonicalLeads.length} loaded · showing {firstVisible}–{lastVisible}</span>{(day || source || query || filter !== "Yet to contact") && <button className="text-button" onClick={clearFilters}>Clear filters</button>}<span><Clock3 size={14} />All timestamps are IST</span></div>
 
     {visible.length ? <div className="lead-table-wrap"><table className="leads-data-table"><colgroup><col className="leads-col-name" /><col className="leads-col-phone" /><col className="leads-col-updated" /><col className="leads-col-destination" /><col className="leads-col-travelers" /><col className="leads-col-date" /><col className="leads-col-next" /><col className="leads-col-email" /><col className="leads-col-campaign" /><col className="leads-col-status" /></colgroup><thead><tr><th>Lead name</th><th>Contact number</th><th>Modified on</th><th>Destination</th><th>Travelers</th><th>Date of travel</th><th>Planning / next step</th><th>Email</th><th>Campaign / source</th><th>Status</th></tr></thead>
-      {visible.map((lead) => <tbody key={lead.uuid}>
+      {pageLeads.map((lead) => <tbody key={lead.uuid}>
         <tr className="lead-table-row">
           <td><button className="lead-table-name" onClick={() => onEdit(lead)}><strong>{lead.name || "WhatsApp enquiry"}</strong></button><button className="lead-expand-button" aria-expanded={expandedLead === lead.uuid} onClick={() => setExpandedLead(expandedLead === lead.uuid ? null : lead.uuid)}>{expandedLead === lead.uuid ? "Hide details" : "Enquiry details"}<ChevronDown size={13} /></button></td>
           <td>{lead.phone ? <a className="leads-phone-link" href={`tel:${lead.phone}`}>{lead.phone}</a> : "Not supplied"}</td>
@@ -61,6 +77,13 @@ export function LeadsWorkspace({ leads, onQuickAdd, onEdit, onRefresh, onMore, i
         </tr>
         {expandedLead === lead.uuid && <tr className="lead-table-detail-row"><td colSpan="10"><div className="lead-table-detail-content"><LeadFacts lead={lead} /><p className="record-help">First message is the message event time, not the ad-click time. Platform is shown only when supplied by Meta; it is not guessed from placements.</p></div></td></tr>}
       </tbody>)}</table></div> : <section className="card empty-records">No matching leads in the loaded records. Try another status, clear filters or load older leads.</section>}
-    {onMore && <button className="secondary-button load-older" onClick={onMore}>Load older leads</button>}
+    {visible.length > 0 && <nav className="record-pagination" aria-label="Lead pages">
+      <span className="pagination-summary">Page {page} of {pageCount}{onMore ? " · more records available" : ""}</span>
+      <div className="pagination-controls">
+        <button className="secondary-button" disabled={page <= 1 || loadingMore} onClick={() => setPage((current) => Math.max(1, current - 1))}>Previous</button>
+        <label>Go to page<select value={page} onChange={(event) => setPage(Number(event.target.value))} aria-label="Go to lead page">{Array.from({ length: pageCount }, (_, index) => <option key={index + 1} value={index + 1}>Page {index + 1}</option>)}</select></label>
+        <button className="secondary-button" disabled={loadingMore || (!onMore && page >= pageCount)} onClick={goNext}>{loadingMore ? "Loading…" : page < pageCount ? "Next" : onMore ? "Next · load more" : "Next"}</button>
+      </div>
+    </nav>}
   </>;
 }
